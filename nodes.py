@@ -991,9 +991,12 @@ class AdaptiveLongestEdge_EditUtils:
     CATEGORY = "advanced/conditioning"
     def calculate_longest_edge(self, image, min_size, max_size):
         output = max(image.shape[1], image.shape[2])
+        
         # print("image.shape[2], image.shape[3]", image.shape[1], image.shape[2])
         # print("longest_edge", output)
         if output <= max_size:
+            if output < min_size:
+                output = min_size
             return (output, )
         # Find how many times m fits into n
         k = int(math.ceil(output / max_size))
@@ -1004,7 +1007,6 @@ class AdaptiveLongestEdge_EditUtils:
         
         if output < min_size:
             output = min_size
-        
         # print("output", output)
         return (output, )  
 
