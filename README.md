@@ -9,7 +9,7 @@ ComfyUI-EditUtils is the follow-up version of ComfyUI-QwenEditUtils, offering en
 
 ## Examples
 <p align="center">
-  <img src="simple example.png" alt="Example Workflow" width="45%" />
+  <img src="simple example.png" alt="Example Workflow" width="80%" />
 </p>
 
 *Simple workflow screenshot showing f2k edit simple.json workflow*
