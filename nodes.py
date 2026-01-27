@@ -422,8 +422,8 @@ class EditTextEncode_EditUtils:
                     crop = "center"
                     
                     width_ceil = math.ceil(scaled_width / vae_unit)
-                    if scaled_width % vae_unit != 0:
-                        width_ceil +=1
+                    # if scaled_width % vae_unit != 0:
+                    #     width_ceil +=1
                     canvas_width = width_ceil * vae_unit
                     
                     height_ceil = math.ceil(scaled_height / vae_unit)
@@ -1105,6 +1105,7 @@ class QwenEditTextEncode_EditUtils:
                 "image2": ("IMAGE", ),
                 "image3": ("IMAGE", ),
                 "ref_longest_edge": ("INT", {"default": 1024, "min": 8, "max": 4096, "step": 1, "tooltip": "Longest edge of the output latent"}),
+                "mask": ("MASK", ),
             }
         }
 
@@ -1116,6 +1117,7 @@ class QwenEditTextEncode_EditUtils:
     
     def encode(self, clip, vae, prompt,
                image1=None, image2=None, image3=None,
+               mask=None,  # New mask parameter
                ref_longest_edge=1024):
         # Prepare model config
         model_config = {
@@ -1130,6 +1132,9 @@ class QwenEditTextEncode_EditUtils:
         
         # Process each image if provided
         if image1 is not None:
+            # Set mask to image1 if provided
+            if mask is not None:
+                model_config["mask"] = mask
             config1 = {
                 "image": image1,
                 "to_ref": True,  # Default to True
@@ -1205,6 +1210,7 @@ class Flux2KleinEditTextEncode_EditUtils:
                 "image2": ("IMAGE", ),
                 "image3": ("IMAGE", ),
                 "ref_longest_edge": ("INT", {"default": 1024, "min": 8, "max": 4096, "step": 1, "tooltip": "Longest edge of the output latent"}),
+                "mask": ("MASK", ),
             }
         }
 
@@ -1216,12 +1222,14 @@ class Flux2KleinEditTextEncode_EditUtils:
     
     def encode(self, clip, vae, prompt,
                image1=None, image2=None, image3=None,
+               mask=None,  # New mask parameter
                ref_longest_edge=1024):
         # Prepare model config
         model_config = {
             "model_name": "flux2klein",
             "instruction": "",
-            "vae_unit": 16  # Different from qwen's default of 8
+            "vae_unit": 8,
+            "llama_template": get_system_prompt("")
         }
         
         # Prepare configs list
@@ -1229,6 +1237,9 @@ class Flux2KleinEditTextEncode_EditUtils:
         
         # Process each image if provided
         if image1 is not None:
+            # Set mask to image1 if provided
+            if mask is not None:
+                model_config["mask"] = mask
             config1 = {
                 "image": image1,
                 "to_ref": True,  # Default to True
