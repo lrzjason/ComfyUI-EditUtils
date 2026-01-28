@@ -248,9 +248,9 @@ class QwenModelConfig_EditUtils:
         
         config = {
             "model_name": "qwen",
-            "instruction": instruction,
             "vae_unit": 8
         }
+        config["llama_template"] = get_system_prompt(instruction)
         return (config,)
 
 class Flux2KleinModelConfig_EditUtils:
