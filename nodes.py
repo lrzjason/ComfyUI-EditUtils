@@ -1229,7 +1229,7 @@ class Flux2KleinEditTextEncode_EditUtils:
         model_config = {
             "model_name": "flux2klein",
             "instruction": "",
-            "vae_unit": 8,
+            "vae_unit": 16,
             "llama_template": get_system_prompt("")
         }
         
