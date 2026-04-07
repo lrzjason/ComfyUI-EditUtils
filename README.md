@@ -2,6 +2,9 @@
 
 A collection of utility nodes for advanced image editing in ComfyUI, supporting multiple AI models including Qwen and Flux2Klein.
 
+## Update
+20260407 Fixed Extra Height Unit Pad Which Introduce More Color Shift Compared To Official Workflow.
+
 ## Overview
 
 ComfyUI-EditUtils is the follow-up version of ComfyUI-QwenEditUtils, offering enhanced capabilities for image editing workflows with support for multiple AI models. This package provides a comprehensive set of tools for advanced image editing, featuring flexible configuration options and model-specific optimizations.
@@ -51,6 +54,21 @@ Documentation:
 - **Advanced Processing**: Supports complex image editing workflows with multiple reference images
 - **Comprehensive Output**: Detailed output dictionary with all processing intermediates
 - **Modular Design**: Separated configuration, processing, and extraction nodes for maximum flexibility
+
+## New Nodes
+
+### DiffMask_EditUtils
+A utility node that generates a mask highlighting the differences between two images. Useful for editing tasks where you want to identify changed regions.
+
+**Inputs:**
+- `image1`: First image
+- `image2`: Second image
+- `threshold`: Threshold to ignore minor differences (0.0-1.0, default: 0.05)
+
+**Output:**
+- `mask`: A mask highlighting differences between the two images
+
+**Use Case:** Compare original and edited images to create a mask for selective editing or inpainting.
 
 ## Installation
 
