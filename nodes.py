@@ -321,8 +321,8 @@ class EditTextEncode_EditUtils:
             #     "instruction": ("STRING", {"multiline": True, "default": "Describe the key features of the input image (color, shape, size, texture, objects, background), then explain how the user's text instruction should alter or modify the image. Generate a new image that meets the user's requirements while maintaining consistency with the original input where appropriate."}),   
             # }
         }
-    RETURN_TYPES = ("CONDITIONING", "LATENT", "ANY", "IMAGE", "MASK")
-    RETURN_NAMES = ("conditioning", "latent", "custom_output", "main_image", "mask")
+    RETURN_TYPES = ("CONDITIONING", "LATENT", "ANY", "IMAGE", "MASK", "ANY")
+    RETURN_NAMES = ("conditioning", "latent", "custom_output", "main_image", "mask", "pad_info")
     FUNCTION = "encode"
 
     CATEGORY = "advanced/conditioning"
@@ -427,8 +427,8 @@ class EditTextEncode_EditUtils:
                     canvas_width = width_ceil * vae_unit
                     
                     height_ceil = math.ceil(scaled_height / vae_unit)
-                    if scaled_height % vae_unit != 0:
-                        height_ceil +=1
+                    # if scaled_height % vae_unit != 0:
+                    #     height_ceil +=1
                     canvas_height = height_ceil * vae_unit
                     # pad image to canvas size
                     canvas = torch.zeros(
@@ -564,7 +564,7 @@ class EditTextEncode_EditUtils:
             custom_output["vl_images"] = vl_images
             custom_output["full_prompt"] = full_prompt
         
-        return (conditioning_output, latent_out, custom_output, main_image, noise_mask)
+        return (conditioning_output, latent_out, custom_output, main_image, noise_mask, pad_info)
 
 
 class ConfigJsonParser_EditUtils:
@@ -1091,6 +1091,48 @@ class LoadImageWithFilename_EditUtils:
 
         return True
 
+
+class DiffMask_EditUtils:
+    """
+    A node that generates a mask highlighting the differences between two images.
+    Useful for editing tasks where you want to identify changed regions.
+    """
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "image1": ("IMAGE", ),
+                "image2": ("IMAGE", ),
+                "threshold": ("FLOAT", {"default": 0.05, "min": 0.0, "max": 1.0, "step": 0.001, "tooltip": "Threshold to ignore minor differences (0-1 range)"}),
+            },
+        }
+
+    RETURN_TYPES = ("MASK", )
+    RETURN_NAMES = ("mask", )
+    FUNCTION = "generate_diff_mask"
+
+    CATEGORY = "image"
+
+    def generate_diff_mask(self, image1, image2, threshold):
+        # Ensure images have the same shape
+        if image1.shape != image2.shape:
+            raise ValueError(f"Image shapes do not match: {image1.shape} vs {image2.shape}")
+        
+        # Calculate absolute difference between images
+        # Images are in range [0, 1] typically
+        diff = torch.abs(image1 - image2)
+        
+        # Calculate per-pixel difference (average across channels)
+        # diff shape: (batch, height, width, channels)
+        diff_per_pixel = torch.mean(diff, dim=-1)
+        
+        # Apply threshold: differences below threshold are considered noise/ignored
+        # Create binary mask where significant differences are marked
+        mask = (diff_per_pixel > threshold).float()
+        
+        return (mask, )
+
+
 class QwenEditTextEncode_EditUtils:
     @classmethod
     def INPUT_TYPES(s):
@@ -1305,7 +1347,8 @@ NODE_CLASS_MAPPINGS = {
     "Any2Image_EditUtils": Any2Image_EditUtils,
     "Any2Latent_EditUtils": Any2Latent_EditUtils,
     "AdaptiveLongestEdge_EditUtils": AdaptiveLongestEdge_EditUtils,
-    "LoadImageWithFilename_EditUtils": LoadImageWithFilename_EditUtils
+    "LoadImageWithFilename_EditUtils": LoadImageWithFilename_EditUtils,
+    "DiffMask_EditUtils": DiffMask_EditUtils
 }
 
 # Display name mappings
@@ -1327,5 +1370,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "Any2Image_EditUtils": "EditUtils: Any2Image lrzjason",
     "Any2Latent_EditUtils": "EditUtils: Any2Latent lrzjason",
     "AdaptiveLongestEdge_EditUtils": "EditUtils: Adaptive Longest Edge lrzjason",
-    "LoadImageWithFilename_EditUtils": "EditUtils: Load Image With Filename lrzjason"
+    "LoadImageWithFilename_EditUtils": "EditUtils: Load Image With Filename lrzjason",
+    "DiffMask_EditUtils": "EditUtils: Diff Mask lrzjason"
 }
