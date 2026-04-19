@@ -3,7 +3,7 @@
 A collection of utility nodes for advanced image editing in ComfyUI, supporting multiple AI models including Qwen and Flux2Klein.
 
 ## Update
-20260407 Fixed Extra Height Unit Pad Which Introduce More Color Shift Compared To Official Workflow.
+20260407 Fixed Extra Height Unit Pad Which Introduce Color Shift
 
 ## Overview
 
