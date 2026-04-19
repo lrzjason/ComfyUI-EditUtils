@@ -4,6 +4,7 @@ import comfy.utils
 import math
 import torch
 import torch
+import torch.nn.functional as F
 import numpy as np
 from PIL import Image
 import json
@@ -223,9 +224,9 @@ class ModelConfig_EditUtils:
             "vae_unit": vae_unit
         }
         
-        if model_choice == "qwen":
-            # Add qwen-specific configurations
-            config["llama_template"] = get_system_prompt(instruction)
+        # if model_choice == "qwen":
+        # Add qwen-specific configurations
+        config["llama_template"] = get_system_prompt(instruction)
         
         return (config,)
 
@@ -257,6 +258,9 @@ class Flux2KleinModelConfig_EditUtils:
     @classmethod
     def INPUT_TYPES(s):
         return {
+            "optional": {
+                "instruction": ("STRING", {"multiline": True, "default": ""}),
+            }
         }
 
     RETURN_TYPES = ("DICT",)
@@ -265,12 +269,16 @@ class Flux2KleinModelConfig_EditUtils:
 
     CATEGORY = "advanced/conditioning"
 
-    def configure_model(self):
+    def configure_model(self, instruction=""):
         
         config = {
             "model_name": "flux2klein",
             "vae_unit": 16
         }
+        config["llama_template"] = ""
+        # only when instruction is not empty, set instruction for klein. It is not recommanded but allowed for customization
+        if instruction != "":
+            config["llama_template"] = get_system_prompt(instruction)
         return (config,)
     
 class EditTextEncode_EditUtils:
@@ -339,6 +347,7 @@ class EditTextEncode_EditUtils:
         model_name = model_config["model_name"] if "model_name" in model_config else None
         is_qwen = model_name == "qwen"
         vae_unit = model_config["vae_unit"] if "vae_unit" in model_config else 8
+        llama_template = model_config["llama_template"] if "llama_template" in model_config else ""
         image_prompt = ""
         
         pad_info = {
@@ -380,7 +389,6 @@ class EditTextEncode_EditUtils:
             ref_upscale = image_obj["ref_upscale"]
             
             if is_qwen:
-                llama_template = model_config["llama_template"]
                 to_vl = image_obj["to_vl"]
                 vl_resize = image_obj["vl_resize"]
                 vl_target_size = image_obj["vl_target_size"]
@@ -441,7 +449,6 @@ class EditTextEncode_EditUtils:
                     
                     resized_width = resized_samples.shape[3]
                     resized_height = resized_samples.shape[2]
-                    
                     # set resized samples to canvas
                     # canvas[:, :, x_offset:resized_height, y_offset:resized_width] = resized_samples
                     canvas[:, :, :resized_height, :resized_width] = resized_samples
@@ -526,17 +533,26 @@ class EditTextEncode_EditUtils:
                 vl_images.append(image)
                 
         full_prompt = image_prompt + prompt
-        if is_qwen:
-            tokens = clip.tokenize(full_prompt, images=vl_images, llama_template=llama_template)
-        else:
-            tokens = clip.tokenize(full_prompt)
+        # print("full_prompt", full_prompt)
+        # print("llama_template", llama_template)
+        # if is_qwen:
+        #     tokens = clip.tokenize(full_prompt, images=vl_images, llama_template=llama_template)
+        # else:
+        # print("editutils image_prompt", image_prompt)
+        # print("editutils prompt", prompt)
+        # print("editutils llama_template", llama_template)
+        tokens = clip.tokenize(full_prompt, images=vl_images, llama_template=llama_template)
+        # print("editutils tokens", tokens)
         conditioning = clip.encode_from_tokens_scheduled(tokens)
         samples = torch.zeros(1, 4, 128, 128)
         # conditioning_only_with_main_ref = None
         if len(ref_latents) > 0:
             # conditioning_only_with_main_ref = node_helpers.conditioning_set_values(conditioning, {"reference_latents": [ref_latents[main_image_index]]}, append=True)
             conditioning_full_refs = node_helpers.conditioning_set_values(conditioning, {"reference_latents": ref_latents}, append=True)
+            # print("editutils conditioning_full_refs before", conditioning_full_refs)
             samples = ref_latents[main_image_index]
+            # conditioning_full_refs = node_helpers.conditioning_set_values(conditioning_full_refs, {"concat_latent_image": samples}, append=True)
+            # print("editutils conditioning_full_refs after", conditioning_full_refs)
         latent_out = {"samples": samples}
         
         if noise_mask is not None:
@@ -564,6 +580,8 @@ class EditTextEncode_EditUtils:
             custom_output["vl_images"] = vl_images
             custom_output["full_prompt"] = full_prompt
         
+        
+        # print("editutils conditioning_output", conditioning_output)
         return (conditioning_output, latent_out, custom_output, main_image, noise_mask, pad_info)
 
 
@@ -1094,8 +1112,10 @@ class LoadImageWithFilename_EditUtils:
 
 class DiffMask_EditUtils:
     """
-    A node that generates a mask highlighting the differences between two images.
-    Useful for editing tasks where you want to identify changed regions.
+    Enhanced difference mask generation node:
+    - Supports frequency-domain high-pass filtering, extremely sensitive to high-frequency details (textures, edges, tiny displacements)
+    - Can blend with original pixel difference to balance robustness and sensitivity
+    - Preserves morphological opening and Gaussian blur for denoising and edge smoothing
     """
     @classmethod
     def INPUT_TYPES(s):
@@ -1103,34 +1123,121 @@ class DiffMask_EditUtils:
             "required": {
                 "image1": ("IMAGE", ),
                 "image2": ("IMAGE", ),
-                "threshold": ("FLOAT", {"default": 0.05, "min": 0.0, "max": 1.0, "step": 0.001, "tooltip": "Threshold to ignore minor differences (0-1 range)"}),
+                "threshold": ("FLOAT", {"default": 0.05, "min": 0.0, "max": 1.0, "step": 0.001, "tooltip": "Binarization threshold (0-1)"}),
+                "blur_radius": ("INT", {"default": 5, "min": 0, "max": 50, "step": 1, "tooltip": "Gaussian blur kernel size (0 means no blur)"}),
+                "erode_size": ("INT", {"default": 3, "min": 0, "max": 20, "step": 1, "tooltip": "Erosion kernel size (0 means no erosion)"}),
+                "dilate_size": ("INT", {"default": 3, "min": 0, "max": 20, "step": 1, "tooltip": "Dilation kernel size (0 means no dilation)"}),
+                "use_frequency": ("BOOLEAN", {"default": True, "tooltip": "Enable frequency-domain high-pass filtering (strongly recommended)"}),
+                "highpass_sigma": ("FLOAT", {"default": 10.0, "min": 1.0, "max": 100.0, "step": 0.5, "tooltip": "High-pass filter cutoff frequency (sigma), smaller values emphasize higher frequencies"}),
+                "freq_weight": ("FLOAT", {"default": 0.7, "min": 0.0, "max": 1.0, "step": 0.05, "tooltip": "Weight for frequency-domain difference, remaining weight goes to original pixel difference"}),
             },
         }
 
-    RETURN_TYPES = ("MASK", )
-    RETURN_NAMES = ("mask", )
+    RETURN_TYPES = ("MASK",)
+    RETURN_NAMES = ("mask",)
     FUNCTION = "generate_diff_mask"
 
     CATEGORY = "image"
 
-    def generate_diff_mask(self, image1, image2, threshold):
+    def generate_diff_mask(self, image1, image2, threshold, blur_radius, erode_size, dilate_size,
+                           use_frequency, highpass_sigma, freq_weight):
         # Ensure images have the same shape
         if image1.shape != image2.shape:
             raise ValueError(f"Image shapes do not match: {image1.shape} vs {image2.shape}")
-        
-        # Calculate absolute difference between images
-        # Images are in range [0, 1] typically
-        diff = torch.abs(image1 - image2)
-        
-        # Calculate per-pixel difference (average across channels)
-        # diff shape: (batch, height, width, channels)
-        diff_per_pixel = torch.mean(diff, dim=-1)
-        
-        # Apply threshold: differences below threshold are considered noise/ignored
-        # Create binary mask where significant differences are marked
-        mask = (diff_per_pixel > threshold).float()
-        
-        return (mask, )
+
+        # Convert to grayscale (luminance weighted average) to simplify frequency-domain processing
+        def rgb_to_luminance(img):
+            # img: (B, H, W, C) range [0,1]
+            luminance = 0.299 * img[..., 0] + 0.587 * img[..., 1] + 0.114 * img[..., 2]
+            return luminance.unsqueeze(1)  # (B,1,H,W)
+
+        gray1 = rgb_to_luminance(image1)
+        gray2 = rgb_to_luminance(image2)
+
+        # Original pixel difference (spatial domain)
+        pixel_diff = torch.abs(gray1 - gray2)  # (B,1,H,W)
+
+        if use_frequency:
+            # Frequency-domain difference calculation (high-pass filter version)
+            freq_diff = self._frequency_highpass_diff(gray1, gray2, highpass_sigma)
+            # Blend frequency-domain difference with spatial-domain difference
+            combined_diff = freq_weight * freq_diff + (1 - freq_weight) * pixel_diff
+        else:
+            combined_diff = pixel_diff
+
+        # Binarization threshold
+        mask = (combined_diff > threshold).float()
+
+        # Morphological opening (erosion followed by dilation) to remove isolated noise
+        if erode_size > 0:
+            kernel_size = erode_size * 2 + 1
+            padding = erode_size
+            mask = -F.max_pool2d(-mask, kernel_size=kernel_size, stride=1, padding=padding)
+        if dilate_size > 0:
+            kernel_size = dilate_size * 2 + 1
+            padding = dilate_size
+            mask = F.max_pool2d(mask, kernel_size=kernel_size, stride=1, padding=padding)
+
+        # Gaussian blur to smooth mask edges
+        if blur_radius > 0:
+            if blur_radius % 2 == 0:
+                blur_radius += 1
+            sigma = blur_radius / 3.0
+            kernel_size = blur_radius
+            x = torch.arange(kernel_size, dtype=torch.float32, device=mask.device) - (kernel_size - 1) / 2
+            gaussian_1d = torch.exp(-x**2 / (2 * sigma**2))
+            gaussian_1d = gaussian_1d / gaussian_1d.sum()
+            kernel_h = gaussian_1d.view(1, 1, 1, kernel_size)
+            kernel_v = gaussian_1d.view(1, 1, kernel_size, 1)
+            padding = kernel_size // 2
+            mask = F.conv2d(mask, kernel_h.expand(mask.size(1), 1, 1, kernel_size),
+                            padding=(0, padding), groups=mask.size(1))
+            mask = F.conv2d(mask, kernel_v.expand(mask.size(1), 1, kernel_size, 1),
+                            padding=(padding, 0), groups=mask.size(1))
+            mask = mask.clamp(0, 1)
+
+        # Remove channel dimension, return (B, H, W)
+        mask = mask.squeeze(1)
+        return (mask,)
+
+    def _frequency_highpass_diff(self, img1, img2, sigma):
+        """
+        Compute high-pass frequency-domain difference map between two grayscale images.
+        img1, img2: (B,1,H,W) range [0,1]
+        sigma: cutoff frequency for Gaussian high-pass filter (larger values preserve more low frequencies, smaller values are more high-pass)
+        Returns: (B,1,H,W) difference map (range [0,1])
+        """
+        B, C, H, W = img1.shape
+        device = img1.device
+
+        # Real FFT (use rfft2 to save computation)
+        f1 = torch.fft.rfft2(img1, norm='ortho')   # Complex tensor (B,1,H, W//2+1)
+        f2 = torch.fft.rfft2(img2, norm='ortho')
+        diff_f = f1 - f2
+
+        # Build high-pass filter (Gaussian high-pass)
+        # Frequency coordinates normalized to [-0.5,0.5] range, only take positive frequencies (rfft2)
+        fy = torch.fft.fftfreq(H, device=device).view(-1, 1)
+        fx = torch.fft.rfftfreq(W, device=device).view(1, -1)
+        # Radius squared (accounting for rfft storing only half the frequencies)
+        radius_sq = fy**2 + fx**2
+        # Gaussian high-pass: 1 - exp(-radius_sq / (2*sigma_norm^2))
+        # sigma_norm uses relative values, larger sigma is closer to all-pass, smaller sigma is more high-pass
+        sigma_norm = sigma / min(H, W)  # Map sigma to normalized frequency domain
+        highpass = 1 - torch.exp(-radius_sq / (2 * sigma_norm**2))
+        highpass = highpass.unsqueeze(0).unsqueeze(0)  # (1,1,H, W//2+1)
+
+        # Apply filter
+        filtered_f = diff_f * highpass
+
+        # Inverse transform back to spatial domain (real)
+        filtered_spatial = torch.fft.irfft2(filtered_f, s=(H, W), norm='ortho')
+        # Take absolute value as difference intensity (may have negative values)
+        diff_map = torch.abs(filtered_spatial)
+
+        # Normalize to [0,1] (across batch and spatial dimensions)
+        diff_map = diff_map / (diff_map.max() + 1e-6)
+        return diff_map
 
 
 class QwenEditTextEncode_EditUtils:
