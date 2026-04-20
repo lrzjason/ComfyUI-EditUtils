@@ -541,7 +541,10 @@ class EditTextEncode_EditUtils:
         # print("editutils image_prompt", image_prompt)
         # print("editutils prompt", prompt)
         # print("editutils llama_template", llama_template)
-        tokens = clip.tokenize(full_prompt, images=vl_images, llama_template=llama_template)
+        if llama_template == "" or llama_template is None:
+            tokens = clip.tokenize(full_prompt, images=vl_images)
+        else:
+            tokens = clip.tokenize(full_prompt, images=vl_images, llama_template=llama_template)
         # print("editutils tokens", tokens)
         conditioning = clip.encode_from_tokens_scheduled(tokens)
         samples = torch.zeros(1, 4, 128, 128)
