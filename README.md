@@ -11,11 +11,8 @@ ComfyUI-EditUtils is the follow-up version of ComfyUI-QwenEditUtils, offering en
 
 
 ## Examples
-<p align="center">
-  <img src="simple example.png" alt="Example Workflow" width="80%" />
-</p>
-
-*Simple workflow screenshot showing f2k edit simple.json workflow*
+RunningHub Single Image Workflow:
+https://www.runninghub.ai/post/2045207600739913729/?inviteCode=rh-v1279
 
 ## Usage Tips
 
