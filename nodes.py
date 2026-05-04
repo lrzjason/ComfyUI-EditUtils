@@ -1685,12 +1685,12 @@ NODE_CLASS_MAPPINGS = {
     "Any2Latent_EditUtils": Any2Latent_EditUtils,
     "AdaptiveLongestEdge_EditUtils": AdaptiveLongestEdge_EditUtils,
     "LoadImageWithFilename_EditUtils": LoadImageWithFilename_EditUtils,
-    "DiffMask_EditUtils": DiffMask_EditUtils,
     "LongestEdgeImageProcess_EditUtils": LongestEdgeImageProcess_EditUtils,
     "ClearRefLatents_EditUtils": ClearRefLatents_EditUtils,
     "SaveCondition_EditUtils": SaveCondition_EditUtils,
     "LoadCondition_EditUtils": LoadCondition_EditUtils,
-    "LoadConditionFromLoras_EditUtils": LoadConditionFromLoras_EditUtils
+    "LoadConditionFromLoras_EditUtils": LoadConditionFromLoras_EditUtils,
+    "DiffMask_EditUtils": DiffMask_EditUtils
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "CropWithPadInfo_EditUtils": "EditUtils: Crop With Pad Info lrzjason",
@@ -1711,10 +1711,10 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "Any2Latent_EditUtils": "EditUtils: Any2Latent lrzjason",
     "AdaptiveLongestEdge_EditUtils": "EditUtils: Adaptive Longest Edge lrzjason",
     "LoadImageWithFilename_EditUtils": "EditUtils: Load Image With Filename lrzjason",
-    "DiffMask_EditUtils": "EditUtils: Diff Mask lrzjason",
     "LongestEdgeImageProcess_EditUtils": "EditUtils: Longest Edge Image Process lrzjason",
     "ClearRefLatents_EditUtils": "EditUtils: Clear Ref Latents lrzjason",
     "SaveCondition_EditUtils": "EditUtils: Save Condition lrzjason",
     "LoadCondition_EditUtils": "EditUtils: Load Condition lrzjason",
-    "LoadConditionFromLoras_EditUtils": "EditUtils: Load Condition From Loras lrzjason"
+    "LoadConditionFromLoras_EditUtils": "EditUtils: Load Condition From Loras lrzjason",
+    "DiffMask_EditUtils": "EditUtils: Diff Mask lrzjason"
 }
