@@ -3,6 +3,7 @@
 A collection of utility nodes for advanced image editing in ComfyUI, supporting multiple AI models including Qwen and Flux2Klein.
 
 ## Update
+20260504 Added Longest Edge Image Process, Clear Ref Latents, Save/Load Condition nodes. Fixed no_refs_cond output in Output Extractors.
 20260407 Fixed Extra Height Unit Pad Which Introduce Color Shift
 
 ## Overview
@@ -56,6 +57,63 @@ Documentation:
 - **Modular Design**: Separated configuration, processing, and extraction nodes for maximum flexibility
 
 ## New Nodes
+
+### LongestEdgeImageProcess_EditUtils
+A utility node that resizes and pads an image based on a target longest edge, using the same processing logic as EditTextEncode. Useful when you need the image preprocessing without CLIP/VAE encoding.
+
+**Inputs:**
+- `image`: Input image
+- `ref_longest_edge`: Target longest edge size (default: 1024)
+- `ref_crop`: Crop method - "pad", "center", or "disabled" (default: "pad")
+- `ref_upscale`: Upscale method (default: "lanczos")
+- `vae_unit`: VAE unit size for padding alignment (default: 8)
+
+**Outputs:**
+- `processed_image`: The resized/padded image
+- `pad_info`: Padding information dictionary
+- `scale_by`: The scale factor
+
+**Use Case:** Pre-process images with longest edge scaling before passing to other nodes, or reuse the same image processing pipeline outside of the encoding workflow.
+
+### ClearRefLatents_EditUtils
+A utility node that strips reference latents from a conditioning, outputting a clean conditioning without any ref latents attached.
+
+**Inputs:**
+- `conditioning`: Conditioning with reference latents
+
+**Outputs:**
+- `conditioning`: The same conditioning with reference latents cleared
+
+**Use Case:** Remove reference latents from conditioning when you want to use the text encoding without image references.
+
+### SaveCondition_EditUtils
+Saves a conditioning tensor to a `.ckpt` file in the `models/conditions` directory.
+
+**Inputs:**
+- `condition`: The conditioning to save
+- `filename`: Output filename (default: "condition_tensor")
+
+**Use Case:** Persist conditioning tensors for later reuse without re-encoding.
+
+### LoadCondition_EditUtils
+Loads a conditioning tensor from a `.ckpt` file in the `models/conditions` directory.
+
+**Inputs:**
+- `filename`: Select from available `.ckpt` files in the conditions directory
+
+**Outputs:**
+- `conditioning`: The loaded conditioning tensor
+
+**Use Case:** Reuse previously saved conditioning tensors in new workflows.
+
+### LoadConditionFromLoras_EditUtils
+Lists files from the loras directory and attempts to load matching `.ckpt` files from the conditions directory.
+
+**Inputs:**
+- `filename`: Select from available lora files
+
+**Outputs:**
+- `conditioning`: The loaded conditioning tensor
 
 ### DiffMask_EditUtils
 A utility node that generates a mask highlighting the differences between two images. Useful for editing tasks where you want to identify changed regions.

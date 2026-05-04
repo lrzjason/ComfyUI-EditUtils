@@ -576,7 +576,7 @@ class EditTextEncode_EditUtils:
             "vae_images": vae_images,
             "ref_latents": ref_latents,
             # "llama_template": llama_template,
-            # "no_refs_cond": conditioning,
+            "no_refs_cond": conditioning,
             "mask": noise_mask,
         }
         if is_qwen:
@@ -761,28 +761,21 @@ class Flux2KleinOutputExtractor_EditUtils:
             }
         }
 
-    # RETURN_TYPES = ("ANY", "MASK", "CONDITIONING", "CONDITIONING", "IMAGE", "LIST", "LIST", "LIST", "STRING", "STRING")
-    # RETURN_NAMES = ("pad_info", "noise_mask", "full_refs_cond", "main_ref_cond", "main_image", "vae_images", "ref_latents", "vl_images", "full_prompt", "llama_template")
-    
-    RETURN_TYPES = ("ANY", "IMAGE", "LIST", "LIST", "LIST", "STRING", "STRING", "CONDITIONING", "MASK")
+    RETURN_TYPES = ("ANY", "IMAGE", "LIST", "LIST", "STRING", "STRING", "CONDITIONING", "MASK")
     RETURN_NAMES = ("pad_info", "main_image", "vae_images", "ref_latents", "full_prompt", "llama_template", "no_refs_cond", "mask")
     FUNCTION = "extract"
 
     CATEGORY = "advanced/conditioning"
     
     def extract(self, custom_output):
-        pad_info = custom_output['pad_info'] if 'pad_info' in custom_output else None
-        # noise_mask = custom_output['noise_mask']
-        # full_refs_cond = custom_output['full_refs_cond']
-        # main_ref_cond = custom_output['main_ref_cond']
-        main_image = custom_output['main_image'] if 'main_image' in custom_output else None
-        vae_images = custom_output['vae_images'] if 'vae_images' in custom_output else None
-        ref_latents = custom_output['ref_latents'] if 'ref_latents' in custom_output else None
-        # vl_images = custom_output['vl_images']
-        full_prompt = custom_output['full_prompt'] if 'full_prompt' in custom_output else None
-        llama_template = custom_output['llama_template'] if 'llama_template' in custom_output else None
-        no_refs_cond = custom_output['no_refs_cond'] if 'no_refs_cond' in custom_output else None
-        mask = custom_output['mask'] if 'mask' in custom_output else None
+        pad_info = custom_output.get('pad_info')
+        main_image = custom_output.get('main_image')
+        vae_images = custom_output.get('vae_images')
+        ref_latents = custom_output.get('ref_latents')
+        full_prompt = custom_output.get('full_prompt')
+        llama_template = custom_output.get('llama_template')
+        no_refs_cond = custom_output.get('no_refs_cond')
+        mask = custom_output.get('mask')
         
         return (pad_info, main_image, vae_images, ref_latents, full_prompt, llama_template, no_refs_cond, mask)
 
@@ -894,7 +887,7 @@ class QwenEditOutputExtractor_EditUtils:
         "vl_images",
         "full_prompt",
         # "llama_template",
-        # "no_refs_cond",
+        "no_refs_cond",
         "mask"
     ]
     @classmethod
@@ -906,9 +899,6 @@ class QwenEditOutputExtractor_EditUtils:
             }
         }
 
-    # RETURN_TYPES = ("ANY", "MASK", "CONDITIONING", "CONDITIONING", "IMAGE", "LIST", "LIST", "LIST", "STRING", "STRING")
-    # RETURN_NAMES = ("pad_info", "noise_mask", "full_refs_cond", "main_ref_cond", "main_image", "vae_images", "ref_latents", "vl_images", "full_prompt", "llama_template")
-    
     RETURN_TYPES = ("ANY", "CONDITIONING", "CONDITIONING", "IMAGE", "LIST", "LIST", "LIST", "STRING", "STRING", "CONDITIONING", "MASK")
     RETURN_NAMES = ("pad_info", "full_refs_cond", "main_ref_cond", "main_image", "vae_images", "ref_latents", "vl_images", "full_prompt", "llama_template", "no_refs_cond", "mask")
     FUNCTION = "extract"
@@ -916,18 +906,17 @@ class QwenEditOutputExtractor_EditUtils:
     CATEGORY = "advanced/conditioning"
     
     def extract(self, custom_output):
-        pad_info = custom_output['pad_info'] if 'pad_info' in custom_output else None
-        # noise_mask = custom_output['noise_mask']
-        full_refs_cond = custom_output['full_refs_cond'] if 'full_refs_cond' in custom_output else None
-        main_ref_cond = custom_output['main_ref_cond'] if 'main_ref_cond' in custom_output else None
-        main_image = custom_output['main_image'] if 'main_image' in custom_output else None
-        vae_images = custom_output['vae_images'] if 'vae_images' in custom_output else None
-        ref_latents = custom_output['ref_latents'] if 'ref_latents' in custom_output else None
-        vl_images = custom_output['vl_images'] if 'vl_images' in custom_output else None
-        full_prompt = custom_output['full_prompt'] if 'full_prompt' in custom_output else None
-        llama_template = custom_output['llama_template'] if 'llama_template' in custom_output else None
-        no_refs_cond = custom_output['no_refs_cond'] if 'no_refs_cond' in custom_output else None
-        mask = custom_output['mask'] if 'mask' in custom_output else None
+        pad_info = custom_output.get('pad_info')
+        full_refs_cond = custom_output.get('full_refs_cond')
+        main_ref_cond = custom_output.get('main_ref_cond')
+        main_image = custom_output.get('main_image')
+        vae_images = custom_output.get('vae_images')
+        ref_latents = custom_output.get('ref_latents')
+        vl_images = custom_output.get('vl_images')
+        full_prompt = custom_output.get('full_prompt')
+        llama_template = custom_output.get('llama_template')
+        no_refs_cond = custom_output.get('no_refs_cond')
+        mask = custom_output.get('mask')
         
         return (pad_info, full_refs_cond, main_ref_cond, main_image, vae_images, ref_latents, vl_images, full_prompt, llama_template, no_refs_cond, mask)
 
@@ -953,6 +942,161 @@ class ListExtractor_EditUtils:
         assert index < len(items), f"Index out of range, len(image_list): {len(items)}"
         
         return (items[index], )
+
+
+class ClearRefLatents_EditUtils:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": 
+            {
+                "conditioning": ("CONDITIONING", ),
+            }
+        }
+
+    RETURN_TYPES = ("CONDITIONING", )
+    RETURN_NAMES = ("conditioning", )
+    FUNCTION = "clear_refs"
+
+    CATEGORY = "advanced/conditioning"
+    def clear_refs(self, conditioning):
+        cleared = node_helpers.conditioning_set_values(conditioning, {"reference_latents": []}, append=False)
+        return (cleared, )
+
+
+condition_dir = os.path.join(folder_paths.models_dir, "conditions")
+
+if "conditions" not in folder_paths.folder_names_and_paths:
+    folder_paths.folder_names_and_paths["conditions"] = ([condition_dir], {'.ckpt'})
+
+
+class SaveCondition_EditUtils:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "condition": ("CONDITIONING",),
+                "filename": ("STRING", {"default": "condition_tensor"}),
+            },
+        }
+
+    RETURN_TYPES = ()
+    FUNCTION = "save_condition"
+    CATEGORY = "advanced/conditioning"
+    OUTPUT_NODE = True
+
+    def save_condition(self, condition, filename):
+        os.makedirs(condition_dir, exist_ok=True)
+
+        safe_filename = os.path.basename(filename)
+        if not safe_filename.endswith(".ckpt"):
+            safe_filename += ".ckpt"
+
+        save_dir = folder_paths.folder_names_and_paths["conditions"][0][0]
+        save_path = os.path.join(save_dir, safe_filename)
+
+        try:
+            tensors_to_save = []
+            for cond, cond_info in condition:
+                tensors_to_save.append((cond.clone(), cond_info))
+            torch.save(tensors_to_save, save_path)
+            print(f"Condition tensor saved to {save_path}")
+        except Exception as e:
+            print(f"Error saving condition tensor: {e}")
+
+        return ()
+
+
+class LoadCondition_EditUtils:
+    @classmethod
+    def INPUT_TYPES(cls):
+        os.makedirs(condition_dir, exist_ok=True)
+
+        condition_files = []
+        try:
+            condition_files = folder_paths.get_filename_list("conditions")
+            condition_files = [os.path.splitext(file)[0] for file in condition_files]
+        except Exception as e:
+            print(f"Error listing condition files: {e}")
+
+        if not condition_files:
+            condition_files = ["No files found"]
+
+        return {
+            "required": {
+                "filename": (condition_files, ),
+            },
+        }
+
+    RETURN_TYPES = ("CONDITIONING",)
+    FUNCTION = "load_condition"
+    CATEGORY = "advanced/conditioning"
+
+    def load_condition(self, filename):
+        os.makedirs(condition_dir, exist_ok=True)
+
+        safe_filename = os.path.basename(filename)
+        if not safe_filename.endswith(".ckpt"):
+            safe_filename += ".ckpt"
+
+        load_dir = folder_paths.folder_names_and_paths["conditions"][0][0]
+        load_path = os.path.join(load_dir, safe_filename)
+
+        try:
+            if not os.path.exists(load_path):
+                raise FileNotFoundError(f"Condition file not found: {load_path}")
+            loaded_tensors = torch.load(load_path)
+            print(f"Condition tensor loaded from {load_path}")
+            return (loaded_tensors,)
+        except Exception as e:
+            print(f"Error loading condition tensor: {e}")
+            return ([],)
+
+
+class LoadConditionFromLoras_EditUtils:
+    @classmethod
+    def INPUT_TYPES(cls):
+        os.makedirs(condition_dir, exist_ok=True)
+
+        condition_files = []
+        try:
+            condition_files = folder_paths.get_filename_list("loras")
+            condition_files = [os.path.splitext(file)[0] for file in condition_files]
+        except Exception as e:
+            print(f"Error listing condition files: {e}")
+
+        if not condition_files:
+            condition_files = ["No files found"]
+
+        return {
+            "required": {
+                "filename": (condition_files, ),
+            },
+        }
+
+    RETURN_TYPES = ("CONDITIONING",)
+    FUNCTION = "load_condition"
+    CATEGORY = "advanced/conditioning"
+
+    def load_condition(self, filename):
+        os.makedirs(condition_dir, exist_ok=True)
+
+        safe_filename = os.path.basename(filename)
+        if not safe_filename.endswith(".ckpt"):
+            safe_filename += ".ckpt"
+
+        load_dir = folder_paths.folder_names_and_paths["conditions"][0][0]
+        load_path = os.path.join(load_dir, safe_filename)
+
+        try:
+            if not os.path.exists(load_path):
+                raise FileNotFoundError(f"Condition file not found: {load_path}")
+            loaded_tensors = torch.load(load_path)
+            print(f"Condition tensor loaded from {load_path}")
+            return (loaded_tensors,)
+        except Exception as e:
+            print(f"Error loading condition tensor: {e}")
+            return ([],)
 
 
 class Any2Image_EditUtils:
@@ -1440,6 +1584,89 @@ class Flux2KleinEditTextEncode_EditUtils:
         )
 
 
+class LongestEdgeImageProcess_EditUtils:
+    upscale_methods = ["lanczos", "bicubic", "area"]
+    crop_methods = ["pad", "center", "disabled"]
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "image": ("IMAGE", ),
+                "ref_longest_edge": ("INT", {"default": 1024, "min": 8, "max": 4096, "step": 1, "tooltip": "Longest edge of the output image"}),
+                "ref_crop": (s.crop_methods, {"default": "pad", "tooltip": "Crop method: pad adds padding, center crops to center, disabled keeps as-is"}),
+                "ref_upscale": (s.upscale_methods, {"default": "lanczos", "tooltip": "Upscale method"}),
+                "vae_unit": ("INT", {"default": 8, "min": 8, "max": 64, "step": 8, "tooltip": "VAE unit size for padding alignment"}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "ANY", "FLOAT")
+    RETURN_NAMES = ("processed_image", "pad_info", "scale_by")
+    FUNCTION = "process"
+
+    CATEGORY = "image"
+
+    def process(self, image, ref_longest_edge, ref_crop, ref_upscale, vae_unit):
+        samples = image.movedim(-1, 1)
+
+        ori_longest_edge = max(samples.shape[2], samples.shape[3])
+        scale_by = ori_longest_edge / ref_longest_edge
+        scaled_height = int(round(samples.shape[2] / scale_by))
+        scaled_width = int(round(samples.shape[3] / scale_by))
+
+        pad_info = {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0,
+            "scale_by": round(1 / scale_by, 3)
+        }
+
+        if ref_crop == "pad":
+            crop = "center"
+
+            width_ceil = math.ceil(scaled_width / vae_unit)
+            canvas_width = width_ceil * vae_unit
+
+            height_ceil = math.ceil(scaled_height / vae_unit)
+            canvas_height = height_ceil * vae_unit
+
+            canvas = torch.zeros(
+                (samples.shape[0], samples.shape[1], canvas_height, canvas_width),
+                dtype=samples.dtype,
+                device=samples.device
+            )
+
+            resized_samples = comfy.utils.common_upscale(samples, scaled_width, scaled_height, ref_upscale, crop)
+
+            resized_width = resized_samples.shape[3]
+            resized_height = resized_samples.shape[2]
+            canvas[:, :, :resized_height, :resized_width] = resized_samples
+
+            current_total = (samples.shape[3] * samples.shape[2])
+            total = int(resized_width * resized_height)
+            scale_by_val = math.sqrt(total / current_total)
+
+            pad_info = {
+                "x": 0,
+                "y": 0,
+                "width": canvas_width - resized_width,
+                "height": canvas_height - resized_height,
+                "scale_by": round(1 / scale_by_val, 3)
+            }
+
+            s = canvas
+        else:
+            crop = ref_crop
+            width = round(scaled_width / vae_unit) * vae_unit
+            height = round(scaled_height / vae_unit) * vae_unit
+            s = comfy.utils.common_upscale(samples, width, height, ref_upscale, crop)
+
+        processed_image = s.movedim(1, -1)
+
+        return (processed_image, pad_info, pad_info["scale_by"])
+
+
 NODE_CLASS_MAPPINGS = {
     "CropWithPadInfo_EditUtils": CropWithPadInfo_EditUtils,
     "ModelConfig_EditUtils": ModelConfig_EditUtils,
@@ -1458,10 +1685,13 @@ NODE_CLASS_MAPPINGS = {
     "Any2Latent_EditUtils": Any2Latent_EditUtils,
     "AdaptiveLongestEdge_EditUtils": AdaptiveLongestEdge_EditUtils,
     "LoadImageWithFilename_EditUtils": LoadImageWithFilename_EditUtils,
-    "DiffMask_EditUtils": DiffMask_EditUtils
+    "DiffMask_EditUtils": DiffMask_EditUtils,
+    "LongestEdgeImageProcess_EditUtils": LongestEdgeImageProcess_EditUtils,
+    "ClearRefLatents_EditUtils": ClearRefLatents_EditUtils,
+    "SaveCondition_EditUtils": SaveCondition_EditUtils,
+    "LoadCondition_EditUtils": LoadCondition_EditUtils,
+    "LoadConditionFromLoras_EditUtils": LoadConditionFromLoras_EditUtils
 }
-
-# Display name mappings
 NODE_DISPLAY_NAME_MAPPINGS = {
     "CropWithPadInfo_EditUtils": "EditUtils: Crop With Pad Info lrzjason",
     "ModelConfig_EditUtils": "EditUtils: Model Config lrzjason",
@@ -1481,5 +1711,10 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "Any2Latent_EditUtils": "EditUtils: Any2Latent lrzjason",
     "AdaptiveLongestEdge_EditUtils": "EditUtils: Adaptive Longest Edge lrzjason",
     "LoadImageWithFilename_EditUtils": "EditUtils: Load Image With Filename lrzjason",
-    "DiffMask_EditUtils": "EditUtils: Diff Mask lrzjason"
+    "DiffMask_EditUtils": "EditUtils: Diff Mask lrzjason",
+    "LongestEdgeImageProcess_EditUtils": "EditUtils: Longest Edge Image Process lrzjason",
+    "ClearRefLatents_EditUtils": "EditUtils: Clear Ref Latents lrzjason",
+    "SaveCondition_EditUtils": "EditUtils: Save Condition lrzjason",
+    "LoadCondition_EditUtils": "EditUtils: Load Condition lrzjason",
+    "LoadConditionFromLoras_EditUtils": "EditUtils: Load Condition From Loras lrzjason"
 }
