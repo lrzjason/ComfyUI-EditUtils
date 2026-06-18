@@ -198,7 +198,7 @@ class ModelConfig_EditUtils:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "model_choice": (["qwen", "flux2klein"], {
+                "model_choice": (["qwen", "flux2klein", "boogu"], {
                     "default": "qwen",
                 }),
                 "model_name": ("STRING", {"default": ""}),
@@ -224,9 +224,12 @@ class ModelConfig_EditUtils:
             "vae_unit": vae_unit
         }
         
-        # if model_choice == "qwen":
-        # Add qwen-specific configurations
-        config["llama_template"] = get_system_prompt(instruction)
+        # Boogu tokenizer auto-selects system prompt, no llama_template needed
+        if model_choice == "boogu":
+            config["llama_template"] = ""
+        else:
+            # Add model-specific configurations
+            config["llama_template"] = get_system_prompt(instruction)
         
         return (config,)
 
@@ -281,6 +284,30 @@ class Flux2KleinModelConfig_EditUtils:
             config["llama_template"] = get_system_prompt(instruction)
         return (config,)
     
+class BooguModelConfig_EditUtils:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "optional": {
+                "instruction": ("STRING", {"multiline": True, "default": ""}),
+            }
+        }
+
+    RETURN_TYPES = ("DICT",)
+    RETURN_NAMES = ("model_config",)
+    FUNCTION = "configure_model"
+
+    CATEGORY = "advanced/conditioning"
+
+    def configure_model(self, instruction=""):
+        config = {
+            "model_name": "boogu",
+            "vae_unit": 16,
+            "llama_template": ""
+        }
+        # Boogu tokenizer auto-selects system prompt, instruction is ignored
+        return (config,)
+
 class EditTextEncode_EditUtils:
     # upscale_methods = ["lanczos", "bicubic", "area"]
     # crop_methods = ["pad", "center", "disabled"]
@@ -349,6 +376,7 @@ class EditTextEncode_EditUtils:
         # llama_template = get_system_prompt(instruction)
         model_name = model_config["model_name"] if "model_name" in model_config else None
         is_qwen = model_name == "qwen"
+        is_boogu = model_name == "boogu"
         vae_unit = model_config["vae_unit"] if "vae_unit" in model_config else 8
         llama_template = model_config["llama_template"] if "llama_template" in model_config else ""
         image_prompt = ""
@@ -366,7 +394,75 @@ class EditTextEncode_EditUtils:
             configs = []
         if len(configs) == 0:
             print("EditTextEncode_EditUtils: No image configs provided, performing text-only encoding.")
-        
+
+        # Boogu: completely different processing - early return
+        if is_boogu:
+            negative_prompt = model_config.get("negative_prompt", "")
+            ref_latents = []
+            images_vl = []
+            vae_images_boogu = []
+            for i, image_obj in enumerate(configs):
+                assert "image" in image_obj, "Image is missing"
+                image = image_obj["image"]
+                to_ref = image_obj.get("to_ref", True)
+                to_vl = image_obj.get("to_vl", True)
+                ref_longest_edge = image_obj.get("ref_longest_edge", 1024)
+                ref_crop = image_obj.get("ref_crop", "pad")
+                ref_upscale = image_obj.get("ref_upscale", "lanczos")
+                vl_target_size = image_obj.get("vl_target_size", 384)
+                vl_crop = image_obj.get("vl_crop", "center")
+                vl_upscale = image_obj.get("vl_upscale", "lanczos")
+
+                if not to_ref and not to_vl:
+                    continue
+
+                samples = image.movedim(-1, 1)
+
+                # Vision tower input: area-based scaling to vl_target_size
+                if to_vl:
+                    total = int(vl_target_size * vl_target_size)
+                    scale_by = math.sqrt(total / (samples.shape[3] * samples.shape[2]))
+                    width = round(samples.shape[3] * scale_by)
+                    height = round(samples.shape[2] * scale_by)
+                    s = comfy.utils.common_upscale(samples, width, height, vl_upscale, vl_crop)
+                    images_vl.append(s.movedim(1, -1)[:, :, :, :3])
+
+                # Reference latent: longest-edge scaling, aligned to 16px (vae_unit)
+                if to_ref:
+                    ori_longest_edge = max(samples.shape[2], samples.shape[3])
+                    scale_by = ori_longest_edge / ref_longest_edge
+                    scaled_height = int(round(samples.shape[2] / scale_by))
+                    scaled_width = int(round(samples.shape[3] / scale_by))
+                    width = round(scaled_width / 16.0) * 16
+                    height = round(scaled_height / 16.0) * 16
+                    s = comfy.utils.common_upscale(samples, width, height, ref_upscale, ref_crop)
+                    vae_img = s.movedim(1, -1)[:, :, :, :3]
+                    vae_images_boogu.append(vae_img)
+                    ref_latents.append(vae.encode(vae_img))
+
+            # Tokenize: prompt directly with images (boogu tokenizer auto-selects system prompt)
+            positive = clip.encode_from_tokens_scheduled(clip.tokenize(prompt, images=images_vl))
+            negative = clip.encode_from_tokens_scheduled(clip.tokenize(negative_prompt))
+
+            # Reference latents go on BOTH positive and negative (cancels under CFG)
+            if len(ref_latents) > 0:
+                positive = node_helpers.conditioning_set_values(positive, {"reference_latents": ref_latents}, append=True)
+                negative = node_helpers.conditioning_set_values(negative, {"reference_latents": ref_latents}, append=True)
+
+            samples_out = ref_latents[0] if len(ref_latents) > 0 else torch.zeros(1, 4, 128, 128)
+            latent_out = {"samples": samples_out}
+
+            main_image = vae_images_boogu[0] if len(vae_images_boogu) > 0 else None
+
+            custom_output = {
+                "negative_cond": negative,
+                "ref_latents": ref_latents,
+                "vl_images": images_vl,
+                "vae_images": vae_images_boogu,
+            }
+
+            return (positive, latent_out, custom_output, main_image, None, pad_info)
+
         main_image_index = -1
         for i, image_obj in enumerate(configs):
             if image_obj["to_ref"]:
@@ -748,6 +844,75 @@ class Flux2KleinConfigPreparer_EditUtils:
         return (config_output, config, )
 
 
+class BooguConfigPreparer_EditUtils:
+    upscale_methods = ["lanczos", "bicubic", "area"]
+    crop_methods = ["pad", "center", "disabled"]
+    vl_crop_methods = ["center", "disabled"]
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required":
+            {
+                "image": ("IMAGE", ),
+            },
+            "optional":
+            {
+                "configs": ("LIST", {"default": None, "tooltip": "Configs list"}),
+                "to_ref": ("BOOLEAN", {"default": True, "tooltip": "Add image to reference latent"}),
+                "ref_main_image": ("BOOLEAN", {"default": True, "tooltip": "Set image as main image which would return the latent as output."}),
+                "ref_longest_edge": ("INT", {"default": 1024, "min": 16, "max": 4096, "step": 1, "tooltip": "Longest edge of the output latent"}),
+                "ref_crop": (s.crop_methods, {"default": "pad", "tooltip": "Crop method for reference image"}),
+                "ref_upscale": (s.upscale_methods, {"default": "lanczos", "tooltip": "Upscale method for reference image"}),
+                "to_vl": ("BOOLEAN", {"default": True, "tooltip": "Add image to boogu vision tower encode"}),
+                "vl_target_size": ("INT", {"default": 384, "min": 384, "max": 2048, "tooltip": "Target size for vision tower input"}),
+                "vl_crop": (s.vl_crop_methods, {"default": "center", "tooltip": "Crop method for vision tower input"}),
+                "vl_upscale": (s.upscale_methods, {"default": "lanczos", "tooltip": "Upscale method for vision tower input"}),
+                "mask": ("MASK", ),
+            }
+        }
+
+    RETURN_TYPES = ("LIST", "ANY", )
+    RETURN_NAMES = ("configs", "config", )
+    FUNCTION = "prepare_config"
+
+    CATEGORY = "advanced/conditioning"
+
+    def prepare_config(self, image, configs=None,
+                to_ref=True, ref_main_image=True, ref_longest_edge=1024, ref_crop="pad", ref_upscale="lanczos",
+                to_vl=True, vl_target_size=384, vl_crop="center", vl_upscale="lanczos",
+                mask=None
+        ):
+        if configs is None:
+            configs = []
+        config = {
+            "image": image,
+            "to_ref": to_ref,
+            "ref_main_image": ref_main_image,
+            "ref_longest_edge": ref_longest_edge,
+            "ref_crop": ref_crop,
+            "ref_upscale": ref_upscale,
+            "to_vl": to_vl,
+            "vl_target_size": vl_target_size,
+            "vl_crop": vl_crop,
+            "vl_upscale": vl_upscale,
+        }
+
+        config_output = copy.deepcopy(configs)
+
+        if mask is not None:
+            # check mask height,width equals image height,width
+            if mask.shape[1] != image.shape[1] or mask.shape[2] != image.shape[2]:
+                print("mask height,width not equals image height,width, skipping mask")
+                mask = None
+            config["mask"] = mask
+
+        del configs
+
+        config_output.append(config)
+        return (config_output, config, )
+
+
 class Flux2KleinOutputExtractor_EditUtils:
     preset_keys = [
         "pad_info",
@@ -786,6 +951,30 @@ class Flux2KleinOutputExtractor_EditUtils:
         
         return (pad_info, main_image, vae_images, ref_latents, full_prompt, llama_template, no_refs_cond, mask)
 
+
+class BooguOutputExtractor_EditUtils:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required":
+            {
+                "custom_output": ("ANY", ),
+            }
+        }
+
+    RETURN_TYPES = ("CONDITIONING", "LIST", "LIST", "IMAGE")
+    RETURN_NAMES = ("negative_cond", "ref_latents", "vl_images", "main_image")
+    FUNCTION = "extract"
+
+    CATEGORY = "advanced/conditioning"
+
+    def extract(self, custom_output):
+        negative_cond = custom_output.get("negative_cond")
+        ref_latents = custom_output.get("ref_latents")
+        vl_images = custom_output.get("vl_images")
+        vae_images = custom_output.get("vae_images")
+        main_image = vae_images[0] if vae_images and len(vae_images) > 0 else None
+        return (negative_cond, ref_latents, vl_images, main_image)
 
 
 class QwenConfigPreparer_EditUtils:
@@ -1591,6 +1780,96 @@ class Flux2KleinEditTextEncode_EditUtils:
         )
 
 
+class BooguEditTextEncode_EditUtils:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "clip": ("CLIP", ),
+                "vae": ("VAE", ),
+                "prompt": ("STRING", {"multiline": True, "dynamicPrompts": True}),
+            },
+            "optional": {
+                "negative_prompt": ("STRING", {"multiline": True, "dynamicPrompts": True, "default": ""}),
+                "image1": ("IMAGE", ),
+                "image2": ("IMAGE", ),
+                "image3": ("IMAGE", ),
+                "ref_longest_edge": ("INT", {"default": 1024, "min": 16, "max": 4096, "step": 1, "tooltip": "Target area edge for reference latent (area-based scaling)"}),
+                "mask": ("MASK", ),
+            }
+        }
+
+    RETURN_TYPES = ("CONDITIONING", "CONDITIONING", "LATENT", "ANY", "IMAGE")
+    RETURN_NAMES = ("positive", "negative", "latent", "custom_output", "main_image")
+    FUNCTION = "encode"
+
+    CATEGORY = "advanced/conditioning"
+
+    def encode(self, clip, vae, prompt,
+               negative_prompt="",
+               image1=None, image2=None, image3=None,
+               ref_longest_edge=1024, mask=None):
+        # Prepare model config for boogu
+        model_config = {
+            "model_name": "boogu",
+            "vae_unit": 16,
+            "llama_template": "",
+            "negative_prompt": negative_prompt
+        }
+
+        # Prepare configs list
+        configs = []
+
+        if image1 is not None:
+            config1 = {
+                "image": image1,
+                "to_ref": True,
+                "ref_main_image": True,
+                "ref_longest_edge": ref_longest_edge,
+                "ref_crop": "pad",
+                "ref_upscale": "lanczos",
+            }
+            if mask is not None:
+                config1["mask"] = mask
+            configs.append(config1)
+
+        if image2 is not None:
+            configs.append({
+                "image": image2,
+                "to_ref": True,
+                "ref_main_image": False,
+                "ref_longest_edge": ref_longest_edge,
+                "ref_crop": "pad",
+                "ref_upscale": "lanczos",
+            })
+
+        if image3 is not None:
+            configs.append({
+                "image": image3,
+                "to_ref": True,
+                "ref_main_image": False,
+                "ref_longest_edge": ref_longest_edge,
+                "ref_crop": "pad",
+                "ref_upscale": "lanczos",
+            })
+
+        if len(configs) == 0:
+            raise ValueError("At least one image must be provided")
+
+        # Call the unified EditTextEncode function
+        node_instance = EditTextEncode_EditUtils()
+        positive, latent_out, custom_output, main_image, noise_mask, pad_info = node_instance.encode(
+            clip=clip,
+            vae=vae,
+            prompt=prompt,
+            model_config=model_config,
+            configs=configs
+        )
+
+        negative = custom_output.get("negative_cond")
+        return (positive, negative, latent_out, custom_output, main_image)
+
+
 class LongestEdgeImageProcess_EditUtils:
     upscale_methods = ["lanczos", "bicubic", "area"]
     crop_methods = ["pad", "center", "disabled"]
@@ -1686,6 +1965,10 @@ NODE_CLASS_MAPPINGS = {
     "Flux2KleinConfigPreparer_EditUtils": Flux2KleinConfigPreparer_EditUtils,
     "Flux2KleinEditTextEncode_EditUtils": Flux2KleinEditTextEncode_EditUtils,
     "Flux2KleinOutputExtractor_EditUtils": Flux2KleinOutputExtractor_EditUtils,
+    "BooguModelConfig_EditUtils": BooguModelConfig_EditUtils,
+    "BooguConfigPreparer_EditUtils": BooguConfigPreparer_EditUtils,
+    "BooguEditTextEncode_EditUtils": BooguEditTextEncode_EditUtils,
+    "BooguOutputExtractor_EditUtils": BooguOutputExtractor_EditUtils,
     "ConfigJsonParser_EditUtils": ConfigJsonParser_EditUtils,
     "ListExtractor_EditUtils": ListExtractor_EditUtils,
     "Any2Image_EditUtils": Any2Image_EditUtils,
@@ -1712,6 +1995,10 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "Flux2KleinConfigPreparer_EditUtils": "EditUtils: Flux2Klein Config Preparer lrzjason",
     "Flux2KleinEditTextEncode_EditUtils": "EditUtils: Flux2Klein Edit Text Encode lrzjason",
     "Flux2KleinOutputExtractor_EditUtils": "EditUtils: Flux2Klein Output Extractor lrzjason",
+    "BooguModelConfig_EditUtils": "EditUtils: Boogu Model Config lrzjason",
+    "BooguConfigPreparer_EditUtils": "EditUtils: Boogu Config Preparer lrzjason",
+    "BooguEditTextEncode_EditUtils": "EditUtils: Boogu Edit Text Encode lrzjason",
+    "BooguOutputExtractor_EditUtils": "EditUtils: Boogu Output Extractor lrzjason",
     "ConfigJsonParser_EditUtils": "EditUtils: Config Json Parser lrzjason",
     "ListExtractor_EditUtils": "EditUtils: List Extractor lrzjason",
     "Any2Image_EditUtils": "EditUtils: Any2Image lrzjason",
