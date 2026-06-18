@@ -320,7 +320,10 @@ class EditTextEncode_EditUtils:
                 "vae": ("VAE", ),
                 "prompt": ("STRING", {"multiline": True, "dynamicPrompts": True}),
                 "model_config": ("DICT", {"default": None}),
-                "configs": ("LIST", {"default": None})
+            },
+            "optional": 
+            {
+                "configs": ("LIST", {"default": None, "tooltip": "List of image configuration dictionaries. When not provided, performs text-only encoding."}),
             },
             # "optional": 
             # {
@@ -358,8 +361,11 @@ class EditTextEncode_EditUtils:
             "scale_by": 1.0,
         }
         # print("len(configs)", len(configs))
-        # check len(configs)
-        assert len(configs) > 0, "No image provided"
+        # handle missing or empty configs: fall back to text-only encoding
+        if configs is None:
+            configs = []
+        if len(configs) == 0:
+            print("EditTextEncode_EditUtils: No image configs provided, performing text-only encoding.")
         
         main_image_index = -1
         for i, image_obj in enumerate(configs):
@@ -549,6 +555,7 @@ class EditTextEncode_EditUtils:
         conditioning = clip.encode_from_tokens_scheduled(tokens)
         samples = torch.zeros(1, 4, 128, 128)
         # conditioning_only_with_main_ref = None
+        conditioning_full_refs = conditioning
         if len(ref_latents) > 0:
             # conditioning_only_with_main_ref = node_helpers.conditioning_set_values(conditioning, {"reference_latents": [ref_latents[main_image_index]]}, append=True)
             conditioning_full_refs = node_helpers.conditioning_set_values(conditioning, {"reference_latents": ref_latents}, append=True)

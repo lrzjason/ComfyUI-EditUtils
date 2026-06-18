@@ -54,7 +54,7 @@ Advanced text encoding node with support for multiple reference images and model
 - **vae**: The VAE model for image encoding
 - **prompt**: The text prompt to encode
 - **model_config**: Model configuration from configuration nodes
-- **configs**: List of image configuration dictionaries
+- **configs**: List of image configuration dictionaries (optional; when omitted, performs text-only encoding)
 
 ##### Outputs
 - **conditioning**: The encoded conditioning tensor
