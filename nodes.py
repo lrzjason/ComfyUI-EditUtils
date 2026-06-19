@@ -407,6 +407,7 @@ class EditTextEncode_EditUtils:
                 to_ref = image_obj.get("to_ref", True)
                 to_vl = image_obj.get("to_vl", True)
                 ref_longest_edge = image_obj.get("ref_longest_edge", 1024)
+                ref_resize_mode = image_obj.get("ref_resize_mode", "longest_edge")
                 ref_crop = image_obj.get("ref_crop", "pad")
                 ref_upscale = image_obj.get("ref_upscale", "lanczos")
                 vl_target_size = image_obj.get("vl_target_size", 384)
@@ -427,14 +428,20 @@ class EditTextEncode_EditUtils:
                     s = comfy.utils.common_upscale(samples, width, height, vl_upscale, vl_crop)
                     images_vl.append(s.movedim(1, -1)[:, :, :, :3])
 
-                # Reference latent: longest-edge scaling, aligned to 16px (vae_unit)
+                # Reference latent: aligned to 16px (vae_unit)
                 if to_ref:
-                    ori_longest_edge = max(samples.shape[2], samples.shape[3])
-                    scale_by = ori_longest_edge / ref_longest_edge
-                    scaled_height = int(round(samples.shape[2] / scale_by))
-                    scaled_width = int(round(samples.shape[3] / scale_by))
-                    width = round(scaled_width / 16.0) * 16
-                    height = round(scaled_height / 16.0) * 16
+                    if ref_resize_mode == "area":
+                        total = int(ref_longest_edge * ref_longest_edge)
+                        scale_by = math.sqrt(total / (samples.shape[3] * samples.shape[2]))
+                        width = round(samples.shape[3] * scale_by / 16.0) * 16
+                        height = round(samples.shape[2] * scale_by / 16.0) * 16
+                    else:  # longest_edge
+                        ori_longest_edge = max(samples.shape[2], samples.shape[3])
+                        scale_by = ori_longest_edge / ref_longest_edge
+                        scaled_height = int(round(samples.shape[2] / scale_by))
+                        scaled_width = int(round(samples.shape[3] / scale_by))
+                        width = round(scaled_width / 16.0) * 16
+                        height = round(scaled_height / 16.0) * 16
                     s = comfy.utils.common_upscale(samples, width, height, ref_upscale, ref_crop)
                     vae_img = s.movedim(1, -1)[:, :, :, :3]
                     vae_images_boogu.append(vae_img)
@@ -489,6 +496,7 @@ class EditTextEncode_EditUtils:
             ref_longest_edge = image_obj["ref_longest_edge"]
             ref_crop = image_obj["ref_crop"]
             ref_upscale = image_obj["ref_upscale"]
+            ref_resize_mode = image_obj.get("ref_resize_mode", "longest_edge")
             
             if is_qwen:
                 to_vl = image_obj["to_vl"]
@@ -520,7 +528,11 @@ class EditTextEncode_EditUtils:
                 # ori_height, ori_width = samples.shape[2:]
                 ori_longest_edge = max(samples.shape[2], samples.shape[3])
                 
-                scale_by = ori_longest_edge / ref_longest_edge
+                if ref_resize_mode == "area":
+                    total = int(ref_longest_edge * ref_longest_edge)
+                    scale_by = math.sqrt(total / (samples.shape[3] * samples.shape[2]))
+                else:  # longest_edge
+                    scale_by = ori_longest_edge / ref_longest_edge
                 scaled_height = int(round(samples.shape[2] / scale_by))
                 scaled_width = int(round(samples.shape[3] / scale_by))
                 
@@ -765,6 +777,7 @@ class Flux2KleinConfigPreparer_EditUtils:
     upscale_methods = ["lanczos", "bicubic", "area"]
     crop_methods = ["pad", "center", "disabled"]
     vl_crop_methods = ["center", "disabled"]
+    resize_modes = ["longest_edge", "area"]
     
     # example_config = {
     #     "image": None,
@@ -798,6 +811,7 @@ class Flux2KleinConfigPreparer_EditUtils:
                 "ref_crop": (s.crop_methods, {"default": "pad", "tooltip": "Crop method for reference image"}),
                 "ref_upscale": (s.upscale_methods, {"default": "lanczos", "tooltip": "Upscale method for reference image"}),
                 "mask": ("MASK", ),
+                "ref_resize_mode": (s.resize_modes, {"default": "longest_edge", "tooltip": "longest_edge: scale so the longest dimension equals ref_longest_edge. area: scale so total pixels equals ref_longest_edge squared."}),
             }
         }
 
@@ -808,7 +822,7 @@ class Flux2KleinConfigPreparer_EditUtils:
     CATEGORY = "advanced/conditioning"
     def prepare_config(self, image, configs=None,
                 to_ref=True, ref_main_image=True, ref_longest_edge=1024, ref_crop="center", ref_upscale="lanczos",
-                mask=None
+                mask=None, ref_resize_mode="longest_edge"
         ):
         if configs is None:
             configs = []
@@ -822,6 +836,7 @@ class Flux2KleinConfigPreparer_EditUtils:
             "ref_longest_edge": ref_longest_edge,
             "ref_crop": ref_crop,
             "ref_upscale": ref_upscale,
+            "ref_resize_mode": ref_resize_mode,
         }
         
         
@@ -848,6 +863,7 @@ class BooguConfigPreparer_EditUtils:
     upscale_methods = ["lanczos", "bicubic", "area"]
     crop_methods = ["pad", "center", "disabled"]
     vl_crop_methods = ["center", "disabled"]
+    resize_modes = ["longest_edge", "area"]
 
     @classmethod
     def INPUT_TYPES(s):
@@ -869,6 +885,7 @@ class BooguConfigPreparer_EditUtils:
                 "vl_crop": (s.vl_crop_methods, {"default": "center", "tooltip": "Crop method for vision tower input"}),
                 "vl_upscale": (s.upscale_methods, {"default": "lanczos", "tooltip": "Upscale method for vision tower input"}),
                 "mask": ("MASK", ),
+                "ref_resize_mode": (s.resize_modes, {"default": "longest_edge", "tooltip": "longest_edge: scale so the longest dimension equals ref_longest_edge. area: scale so total pixels equals ref_longest_edge squared."}),
             }
         }
 
@@ -881,7 +898,7 @@ class BooguConfigPreparer_EditUtils:
     def prepare_config(self, image, configs=None,
                 to_ref=True, ref_main_image=True, ref_longest_edge=1024, ref_crop="pad", ref_upscale="lanczos",
                 to_vl=True, vl_target_size=384, vl_crop="center", vl_upscale="lanczos",
-                mask=None
+                mask=None, ref_resize_mode="area"
         ):
         if configs is None:
             configs = []
@@ -896,6 +913,7 @@ class BooguConfigPreparer_EditUtils:
             "vl_target_size": vl_target_size,
             "vl_crop": vl_crop,
             "vl_upscale": vl_upscale,
+            "ref_resize_mode": ref_resize_mode,
         }
 
         config_output = copy.deepcopy(configs)
@@ -981,6 +999,7 @@ class QwenConfigPreparer_EditUtils:
     upscale_methods = ["lanczos", "bicubic", "area"]
     crop_methods = ["pad", "center", "disabled"]
     vl_crop_methods = ["center", "disabled"]
+    resize_modes = ["longest_edge", "area"]
     
     # example_config = {
     #     "image": None,
@@ -1020,6 +1039,7 @@ class QwenConfigPreparer_EditUtils:
                 "vl_crop": (s.vl_crop_methods, {"default": "center", "tooltip": "Crop method for reference image"}),
                 "vl_upscale": (s.upscale_methods, {"default": "lanczos", "tooltip": "Upscale method for reference image"}),
                 "mask": ("MASK", ),
+                "ref_resize_mode": (s.resize_modes, {"default": "longest_edge", "tooltip": "longest_edge: scale so the longest dimension equals ref_longest_edge. area: scale so total pixels equals ref_longest_edge squared."}),
             }
         }
 
@@ -1031,7 +1051,7 @@ class QwenConfigPreparer_EditUtils:
     def prepare_config(self, image, configs=None,
                 to_ref=True, ref_main_image=True, ref_longest_edge=1024, ref_crop="center", ref_upscale="lanczos",
                 to_vl=True, vl_resize=True, vl_target_size=384, vl_crop="center", vl_upscale="bicubic",
-                mask=None
+                mask=None, ref_resize_mode="longest_edge"
         ):
         if configs is None:
             configs = []
@@ -1045,6 +1065,7 @@ class QwenConfigPreparer_EditUtils:
             "ref_longest_edge": ref_longest_edge,
             "ref_crop": ref_crop,
             "ref_upscale": ref_upscale,
+            "ref_resize_mode": ref_resize_mode,
             
             "to_vl": to_vl,
             "vl_resize": vl_resize,
@@ -1794,8 +1815,9 @@ class BooguEditTextEncode_EditUtils:
                 "image1": ("IMAGE", ),
                 "image2": ("IMAGE", ),
                 "image3": ("IMAGE", ),
-                "ref_longest_edge": ("INT", {"default": 1024, "min": 16, "max": 4096, "step": 1, "tooltip": "Target area edge for reference latent (area-based scaling)"}),
+                "ref_longest_edge": ("INT", {"default": 1024, "min": 16, "max": 4096, "step": 1, "tooltip": "Longest edge of the output latent"}),
                 "mask": ("MASK", ),
+                "ref_resize_mode": (["longest_edge", "area"], {"default": "longest_edge", "tooltip": "longest_edge vs area-based resize"}),
             }
         }
 
@@ -1808,7 +1830,7 @@ class BooguEditTextEncode_EditUtils:
     def encode(self, clip, vae, prompt,
                negative_prompt="",
                image1=None, image2=None, image3=None,
-               ref_longest_edge=1024, mask=None):
+               ref_longest_edge=1024, mask=None, ref_resize_mode="longest_edge"):
         # Prepare model config for boogu
         model_config = {
             "model_name": "boogu",
@@ -1826,6 +1848,7 @@ class BooguEditTextEncode_EditUtils:
                 "to_ref": True,
                 "ref_main_image": True,
                 "ref_longest_edge": ref_longest_edge,
+                "ref_resize_mode": ref_resize_mode,
                 "ref_crop": "pad",
                 "ref_upscale": "lanczos",
             }
@@ -1839,6 +1862,7 @@ class BooguEditTextEncode_EditUtils:
                 "to_ref": True,
                 "ref_main_image": False,
                 "ref_longest_edge": ref_longest_edge,
+                "ref_resize_mode": ref_resize_mode,
                 "ref_crop": "pad",
                 "ref_upscale": "lanczos",
             })
@@ -1849,6 +1873,7 @@ class BooguEditTextEncode_EditUtils:
                 "to_ref": True,
                 "ref_main_image": False,
                 "ref_longest_edge": ref_longest_edge,
+                "ref_resize_mode": ref_resize_mode,
                 "ref_crop": "pad",
                 "ref_upscale": "lanczos",
             })
