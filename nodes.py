@@ -302,7 +302,7 @@ class BooguModelConfig_EditUtils:
     def configure_model(self, instruction=""):
         config = {
             "model_name": "boogu",
-            "vae_unit": 16,
+            "vae_unit": 8,
             "llama_template": ""
         }
         # Boogu tokenizer auto-selects system prompt, instruction is ignored
@@ -410,6 +410,7 @@ class EditTextEncode_EditUtils:
                 ref_resize_mode = image_obj.get("ref_resize_mode", "longest_edge")
                 ref_crop = image_obj.get("ref_crop", "pad")
                 ref_upscale = image_obj.get("ref_upscale", "lanczos")
+                ref_main_image = image_obj.get("ref_main_image", i == 0)
                 vl_target_size = image_obj.get("vl_target_size", 384)
                 vl_crop = image_obj.get("vl_crop", "center")
                 vl_upscale = image_obj.get("vl_upscale", "lanczos")
@@ -428,21 +429,50 @@ class EditTextEncode_EditUtils:
                     s = comfy.utils.common_upscale(samples, width, height, vl_upscale, vl_crop)
                     images_vl.append(s.movedim(1, -1)[:, :, :, :3])
 
-                # Reference latent: aligned to 16px (vae_unit)
+                # Reference latent: aligned to vae_unit
                 if to_ref:
                     if ref_resize_mode == "area":
                         total = int(ref_longest_edge * ref_longest_edge)
                         scale_by = math.sqrt(total / (samples.shape[3] * samples.shape[2]))
-                        width = round(samples.shape[3] * scale_by / 16.0) * 16
-                        height = round(samples.shape[2] * scale_by / 16.0) * 16
+                        scaled_width = int(round(samples.shape[3] * scale_by))
+                        scaled_height = int(round(samples.shape[2] * scale_by))
                     else:  # longest_edge
                         ori_longest_edge = max(samples.shape[2], samples.shape[3])
                         scale_by = ori_longest_edge / ref_longest_edge
                         scaled_height = int(round(samples.shape[2] / scale_by))
                         scaled_width = int(round(samples.shape[3] / scale_by))
-                        width = round(scaled_width / 16.0) * 16
-                        height = round(scaled_height / 16.0) * 16
-                    s = comfy.utils.common_upscale(samples, width, height, ref_upscale, ref_crop)
+
+                    if ref_crop == "pad":
+                        crop = "center"
+                        canvas_width = math.ceil(scaled_width / vae_unit) * vae_unit
+                        canvas_height = math.ceil(scaled_height / vae_unit) * vae_unit
+                        canvas = torch.zeros(
+                            (samples.shape[0], samples.shape[1], canvas_height, canvas_width),
+                            dtype=samples.dtype,
+                            device=samples.device
+                        )
+                        resized_samples = comfy.utils.common_upscale(samples, scaled_width, scaled_height, ref_upscale, crop)
+                        resized_width = resized_samples.shape[3]
+                        resized_height = resized_samples.shape[2]
+                        canvas[:, :, :resized_height, :resized_width] = resized_samples
+                        if ref_main_image:
+                            current_total = (samples.shape[3] * samples.shape[2])
+                            total_px = int(resized_width * resized_height)
+                            scale_by_val = math.sqrt(total_px / current_total)
+                            pad_info = {
+                                "x": 0,
+                                "y": 0,
+                                "width": canvas_width - resized_width,
+                                "height": canvas_height - resized_height,
+                                "scale_by": round(1 / scale_by_val, 3)
+                            }
+                        s = canvas
+                    else:
+                        crop = ref_crop
+                        width = round(scaled_width / vae_unit) * vae_unit
+                        height = round(scaled_height / vae_unit) * vae_unit
+                        s = comfy.utils.common_upscale(samples, width, height, ref_upscale, crop)
+
                     vae_img = s.movedim(1, -1)[:, :, :, :3]
                     vae_images_boogu.append(vae_img)
                     ref_latents.append(vae.encode(vae_img))
@@ -1834,7 +1864,7 @@ class BooguEditTextEncode_EditUtils:
         # Prepare model config for boogu
         model_config = {
             "model_name": "boogu",
-            "vae_unit": 16,
+            "vae_unit": 8,
             "llama_template": "",
             "negative_prompt": negative_prompt
         }
