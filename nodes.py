@@ -322,7 +322,7 @@ class Krea2ModelConfig_EditUtils:
         return {
             "optional": {
                 "instruction": ("STRING", {"multiline": True,
-                                           "default": cls.DEFAULT_INSTRUCTION}),
+                                           "default": self.DEFAULT_INSTRUCTION}),
             }
         }
 
