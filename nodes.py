@@ -313,16 +313,14 @@ class BooguModelConfig_EditUtils:
 class Krea2ModelConfig_EditUtils:
     # Krea2 uses the Qwen text encoder and the Qwen-Image VAE, so it routes
     # through the qwen encoding branch (model_name="qwen", vae_unit=8).
-    DEFAULT_INSTRUCTION = ("Describe the image by detailing the color, shape, "
-                           "size, texture, quantity, text, spatial relationships "
-                           "of the objects and background:")
+    # DEFAULT_INSTRUCTION = ("Describe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:")
 
     @classmethod
     def INPUT_TYPES(s):
         return {
             "optional": {
                 "instruction": ("STRING", {"multiline": True,
-                                           "default": self.DEFAULT_INSTRUCTION}),
+                                           "default": "Describe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:"}),
             }
         }
 
@@ -334,7 +332,7 @@ class Krea2ModelConfig_EditUtils:
 
     def configure_model(self, instruction=None):
         if not instruction:
-            instruction = self.DEFAULT_INSTRUCTION
+            instruction = "Describe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:"
         config = {
             # routing key: qwen encoding path (Krea2 text encoder is Qwen-based)
             "model_name": "qwen",
@@ -812,7 +810,7 @@ class ConfigJsonParser_EditUtils:
             configs = []
         # print("len(configs)", len(configs))
         
-        config = self.default_config.copy()
+        config = ConfigJsonParser_EditUtils.default_config.copy()
         try:
             json_config = json.loads(config_json)
         except Exception as e:
@@ -1591,7 +1589,7 @@ class DiffMask_EditUtils:
 
         if use_frequency:
             # Frequency-domain difference calculation (high-pass filter version)
-            freq_diff = self._frequency_highpass_diff(gray1, gray2, highpass_sigma)
+            freq_diff = DiffMask_EditUtils._frequency_highpass_diff(gray1, gray2, highpass_sigma)
             # Blend frequency-domain difference with spatial-domain difference
             combined_diff = freq_weight * freq_diff + (1 - freq_weight) * pixel_diff
         else:
@@ -1632,7 +1630,8 @@ class DiffMask_EditUtils:
         mask = mask.squeeze(1)
         return (mask,)
 
-    def _frequency_highpass_diff(self, img1, img2, sigma):
+    @staticmethod
+    def _frequency_highpass_diff(img1, img2, sigma):
         """
         Compute high-pass frequency-domain difference map between two grayscale images.
         img1, img2: (B,1,H,W) range [0,1]
