@@ -1,0 +1,1028 @@
+{
+  "id": "fab8aef5-baac-4a25-9f46-2728d63218d4",
+  "revision": 0,
+  "last_node_id": 107,
+  "last_link_id": 201,
+  "nodes": [
+    {
+      "id": 29,
+      "type": "PrimitiveStringMultiline",
+      "pos": [
+        13207.296803535031,
+        3597.0344091426464
+      ],
+      "size": [
+        400,
+        200
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            16
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.27.0",
+        "Node name for S&R": "PrimitiveStringMultiline"
+      },
+      "widgets_values": [
+        "convert the depth map to realistic image. __content__"
+      ]
+    },
+    {
+      "id": 35,
+      "type": "LoadImage",
+      "pos": [
+        13253.233046531672,
+        3235.670778144874
+      ],
+      "size": [
+        270,
+        314
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            58
+          ]
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.26.0",
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "IMG_2489_d.png",
+        "image"
+      ]
+    },
+    {
+      "id": 47,
+      "type": "Krea2ModelConfig_EditUtils",
+      "pos": [
+        13668.018115201301,
+        3249.642091672642
+      ],
+      "size": [
+        400,
+        200
+      ],
+      "flags": {
+        "collapsed": true
+      },
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "model_config",
+          "type": "DICT",
+          "links": [
+            20
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "Krea2ModelConfig_EditUtils"
+      },
+      "widgets_values": [
+        "Describe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:"
+      ]
+    },
+    {
+      "id": 6,
+      "type": "CLIPLoader",
+      "pos": [
+        13659.819120161601,
+        2923.3308262502824
+      ],
+      "size": [
+        450,
+        170
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": [
+            18
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.25.0",
+        "Node name for S&R": "CLIPLoader",
+        "models": [
+          {
+            "name": "qwen3vl_4b_fp8_scaled.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/text_encoders/qwen3vl_4b_fp8_scaled.safetensors",
+            "directory": "text_encoders"
+          }
+        ]
+      },
+      "widgets_values": [
+        "qwen3vl_4b_fp8_scaled.safetensors",
+        "krea2",
+        "default"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "ConditioningZeroOut",
+      "pos": [
+        14569.797952346886,
+        3238.584473959535
+      ],
+      "size": [
+        225,
+        26
+      ],
+      "flags": {
+        "collapsed": false
+      },
+      "order": 12,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "link": 4
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            47
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.25.0",
+        "Node name for S&R": "ConditioningZeroOut"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 31,
+      "type": "VAEDecode",
+      "pos": [
+        15180,
+        3190
+      ],
+      "size": [
+        230,
+        100
+      ],
+      "flags": {
+        "collapsed": false
+      },
+      "order": 15,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 43
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 44
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "slot_index": 0,
+          "links": [
+            60
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.25.0",
+        "Node name for S&R": "VAEDecode"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 52,
+      "type": "CropWithPadInfo_EditUtils",
+      "pos": [
+        15176.98149441708,
+        3077.065433949326
+      ],
+      "size": [
+        282.2955078125,
+        46
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "pad_info",
+          "type": "ANY",
+          "link": 77
+        },
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 79
+        }
+      ],
+      "outputs": [
+        {
+          "name": "cropped_image",
+          "type": "IMAGE",
+          "links": []
+        },
+        {
+          "name": "scale_by",
+          "type": "FLOAT",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CropWithPadInfo_EditUtils"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 14,
+      "type": "StringReplace",
+      "pos": [
+        13665.311566622117,
+        3735.3135382636815
+      ],
+      "size": [
+        400,
+        200.00000000000003
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "string",
+          "type": "STRING",
+          "widget": {
+            "name": "string"
+          },
+          "link": 16
+        },
+        {
+          "name": "replace",
+          "type": "STRING",
+          "widget": {
+            "name": "replace"
+          },
+          "link": 17
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            22
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.27.0",
+        "Node name for S&R": "StringReplace"
+      },
+      "widgets_values": [
+        "",
+        "__content__",
+        ""
+      ]
+    },
+    {
+      "id": 49,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+        14852.331808342491,
+        2923.486304331315
+      ],
+      "size": [
+        447.9836901372382,
+        82
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 76
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            75
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.27.0",
+        "Node name for S&R": "LoraLoaderModelOnly"
+      },
+      "widgets_values": [
+        "krea2_depth_street_epoch56_comfyui.safetensors",
+        1
+      ]
+    },
+    {
+      "id": 43,
+      "type": "SaveImage",
+      "pos": [
+        14830,
+        3710
+      ],
+      "size": [
+        880,
+        1020
+      ],
+      "flags": {},
+      "order": 17,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 65
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": []
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.25.0",
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "Krea2_turbo"
+      ]
+    },
+    {
+      "id": 7,
+      "type": "VAELoader",
+      "pos": [
+        13671.3645242292,
+        3144.7339744626734
+      ],
+      "size": [
+        343.9675755844037,
+        58
+      ],
+      "flags": {
+        "collapsed": false
+      },
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            19,
+            44
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.25.0",
+        "Node name for S&R": "VAELoader",
+        "models": [
+          {
+            "name": "qwen_image_vae.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/vae/qwen_image_vae.safetensors",
+            "directory": "vae"
+          }
+        ]
+      },
+      "widgets_values": [
+        "qwen_image_vae.safetensors"
+      ]
+    },
+    {
+      "id": 15,
+      "type": "EditTextEncode_EditUtils",
+      "pos": [
+        14107.77048369793,
+        3163.231514204132
+      ],
+      "size": [
+        433.2702717613215,
+        448.24679056102286
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 18
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 19
+        },
+        {
+          "name": "model_config",
+          "type": "DICT",
+          "link": 20
+        },
+        {
+          "name": "configs",
+          "shape": 7,
+          "type": "LIST",
+          "link": 21
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "widget": {
+            "name": "prompt"
+          },
+          "link": 22
+        }
+      ],
+      "outputs": [
+        {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "links": [
+            4,
+            46
+          ]
+        },
+        {
+          "name": "latent",
+          "type": "LATENT",
+          "links": [
+            187
+          ]
+        },
+        {
+          "name": "custom_output",
+          "type": "ANY",
+          "links": null
+        },
+        {
+          "name": "main_image",
+          "type": "IMAGE",
+          "links": [
+            79
+          ]
+        },
+        {
+          "name": "mask",
+          "type": "MASK",
+          "links": null
+        },
+        {
+          "name": "pad_info",
+          "type": "ANY",
+          "links": [
+            59,
+            77
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "EditTextEncode_EditUtils"
+      },
+      "widgets_values": [
+        "convert the depth map to realistic image. Detailed Description:\nThis is the third image from the same high-end R-18 erotic cosplay photoshoot series.\nCharacter / Subject\n\nThe same model: a young East Asian woman with long black hair styled in twin tails tied with red ribbons.\nShe wears only partial remnants of the red and gold traditional Japanese/Chinese-inspired demon/oni shrine maiden costume — specifically the ornate red arm sleeves with gold trim and black accents. The rest of her body is completely nude.\nA small, intricate red floral/crest tattoo or body paint design is visible on her lower back, just above her buttocks.\n\nPose\nA top-down (high-angle) view shows her lying face-down on a tatami mat in a very submissive, arched position:\n\nHer upper body is lowered with arms stretched forward, hands placed flat on the floor in front of her (fingers with bright red nail polish).\nHer back is strongly arched, pushing her hips and round buttocks upward toward the camera in a pronounced “face down, ass up” pose.\nHer head is turned down and resting on the mat, obscuring her facial expression.\n\nLocation / Setting\nThe scene is set in an elaborate traditional Japanese-style room:\n\nTatami mat flooring with decorative borders.\nA low dark wooden table in the background holds various props: a white and red kitsune (fox) mask, a small lantern emitting warm light, a sake bottle, cups, and scattered cherry blossom petals.\nAbundant pink cherry blossom arrangements, red drapery, and a large decorative folding fan with floral patterns.\nRed paper lanterns and other traditional ornaments complete the atmospheric, intimate setting.\n\nAdditional Details\n\nThe disassembled cosplay pieces (red and gold fabrics, purple gloves, red ropes with golden bells, and another mask) are scattered around her on the floor, enhancing the “aftermath” or undressing narrative.\nSoft, warm red-toned lighting creates dramatic highlights on her oiled skin and curves.\nThe artist’s signature “GachY 2025.5” appears on the left side of the image.\n\nOverall Impression: This image shifts to a more artistic, voyeuristic top-down perspective, emphasizing the model’s back, hips, and buttocks. It maintains the sensual, high-production erotic cosplay aesthetic of the series while conveying a submissive, intimate mood through the prone arched pose and the “costume discarded” scene."
+      ]
+    },
+    {
+      "id": 4,
+      "type": "UNETLoader",
+      "pos": [
+        13657.837235362902,
+        2743.3308716127194
+      ],
+      "size": [
+        450,
+        140
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            49
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.25.0",
+        "Node name for S&R": "UNETLoader",
+        "models": [
+          {
+            "name": "krea2_turbo_fp8_scaled.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/diffusion_models/krea2_turbo_fp8_scaled.safetensors",
+            "directory": "diffusion_models"
+          }
+        ]
+      },
+      "widgets_values": [
+        "krea2_turbo_int8_convrot.safetensors",
+        "default"
+      ]
+    },
+    {
+      "id": 32,
+      "type": "KSampler",
+      "pos": [
+        14830.96138490425,
+        3066.056817316473
+      ],
+      "size": [
+        320,
+        590
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 75
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 46
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 47
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 187
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "slot_index": 0,
+          "links": [
+            43
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.25.0",
+        "Node name for S&R": "KSampler"
+      },
+      "widgets_values": [
+        720562314201056,
+        "fixed",
+        8,
+        1,
+        "euler",
+        "simple",
+        1
+      ]
+    },
+    {
+      "id": 41,
+      "type": "CropWithPadInfo_EditUtils",
+      "pos": [
+        15190,
+        3340
+      ],
+      "size": [
+        282.2955078125,
+        46
+      ],
+      "flags": {},
+      "order": 16,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "pad_info",
+          "type": "ANY",
+          "link": 59
+        },
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 60
+        }
+      ],
+      "outputs": [
+        {
+          "name": "cropped_image",
+          "type": "IMAGE",
+          "links": [
+            65
+          ]
+        },
+        {
+          "name": "scale_by",
+          "type": "FLOAT",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CropWithPadInfo_EditUtils"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 33,
+      "type": "Krea2EditApply_EditUtils",
+      "pos": [
+        14833.921870968514,
+        2666.0093850379294
+      ],
+      "size": [
+        364.5181640625,
+        202
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 49
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "links": [
+            76
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "Krea2EditApply_EditUtils"
+      },
+      "widgets_values": [
+        "editutils",
+        true,
+        1,
+        true,
+        0.5,
+        true,
+        false
+      ]
+    },
+    {
+      "id": 46,
+      "type": "PrimitiveStringMultiline",
+      "pos": [
+        13176.320407616831,
+        3849.114216908724
+      ],
+      "size": [
+        448.4379996351454,
+        244.8500133493044
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            17
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.27.0",
+        "Node name for S&R": "PrimitiveStringMultiline"
+      },
+      "widgets_values": [
+        "This soft, intimate medium close-up portrait captures a young woman seated on a patterned floor, framed intentionally to crop out most of her face — only her lower lip, chin, and strands of long brown hair are visible — lending the image a quiet, anonymous, gently sensual tone. She leans back, supporting her weight on her left hand planted flat on the floor behind her, while her right hand rests lightly on the hem of her short pleated black skirt, holding and gently lifting the fabric. She wears a Japanese-style sailor school uniform: a cropped white short-sleeved sailor blouse with navy striped collar and a tiny embroidered detail at the chest, cut short enough to reveal a narrow strip of her midriff, accented by a bright, glossy red satin neckerchief knotted at the collar and draped down the front of the top. Opaque white over-the-knee thigh-high stockings, their elastic top bands clearly defined, cover her legs which extend out toward the foreground of the frame.\n\nThe scene unfolds in a sunlit indoor room, with warm directional natural sunlight streaming in from a window along the left edge of the frame, creating dramatic high contrast between bright, crisp highlights on her clothing, skin, and floor, and soft, deep shadows. That left window is layered with window treatments: a semi-transparent light beige sheer curtain backlit by the incoming sun, with a heavier, opaque dark fabric curtain hung behind it. The upper right background reveals a plain off-white interior wall with a dark baseboard running along its bottom edge, and a shallow depth of field keeps the subject and her uniform sharply in focus while gently blurring the background curtains to draw all attention to the figure.\n\nThe entire visible floor is covered in a warm beige low-pile carpet decorated with dark navy curvilinear decorative patterns. The image's restrained, cohesive color palette is anchored in white, black, vivid red, warm beige, and deep navy, and distinct tactile textures define every element: the glossy sheen of the satin neckerchief, the crisp woven fabric of the uniform blouse and pleated skirt, the smooth soft finish of the thigh-high stockings, and the textured nap of the patterned carpet, all working together to reinforce the quiet, warm, intimate mood of the portrait."
+      ]
+    },
+    {
+      "id": 39,
+      "type": "QwenConfigPreparer_EditUtils",
+      "pos": [
+        13664.129879112139,
+        3305.0377894353296
+      ],
+      "size": [
+        365.0865234375,
+        386
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 58
+        },
+        {
+          "name": "configs",
+          "shape": 7,
+          "type": "LIST",
+          "link": null
+        },
+        {
+          "name": "mask",
+          "shape": 7,
+          "type": "MASK",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "configs",
+          "type": "LIST",
+          "links": [
+            21
+          ]
+        },
+        {
+          "name": "config",
+          "type": "ANY",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "QwenConfigPreparer_EditUtils"
+      },
+      "widgets_values": [
+        true,
+        true,
+        1344,
+        "pad",
+        "lanczos",
+        true,
+        true,
+        384,
+        "center",
+        "lanczos",
+        "longest_edge",
+        0,
+        0
+      ]
+    }
+  ],
+  "links": [
+    [
+      4,
+      15,
+      0,
+      3,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      16,
+      29,
+      0,
+      14,
+      0,
+      "STRING"
+    ],
+    [
+      17,
+      46,
+      0,
+      14,
+      1,
+      "STRING"
+    ],
+    [
+      18,
+      6,
+      0,
+      15,
+      0,
+      "CLIP"
+    ],
+    [
+      19,
+      7,
+      0,
+      15,
+      1,
+      "VAE"
+    ],
+    [
+      20,
+      47,
+      0,
+      15,
+      2,
+      "DICT"
+    ],
+    [
+      21,
+      39,
+      0,
+      15,
+      3,
+      "LIST"
+    ],
+    [
+      22,
+      14,
+      0,
+      15,
+      4,
+      "STRING"
+    ],
+    [
+      43,
+      32,
+      0,
+      31,
+      0,
+      "LATENT"
+    ],
+    [
+      44,
+      7,
+      0,
+      31,
+      1,
+      "VAE"
+    ],
+    [
+      46,
+      15,
+      0,
+      32,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      47,
+      3,
+      0,
+      32,
+      2,
+      "CONDITIONING"
+    ],
+    [
+      49,
+      4,
+      0,
+      33,
+      0,
+      "MODEL"
+    ],
+    [
+      58,
+      35,
+      0,
+      39,
+      0,
+      "IMAGE"
+    ],
+    [
+      59,
+      15,
+      5,
+      41,
+      0,
+      "ANY"
+    ],
+    [
+      60,
+      31,
+      0,
+      41,
+      1,
+      "IMAGE"
+    ],
+    [
+      65,
+      41,
+      0,
+      43,
+      0,
+      "IMAGE"
+    ],
+    [
+      75,
+      49,
+      0,
+      32,
+      0,
+      "MODEL"
+    ],
+    [
+      76,
+      33,
+      0,
+      49,
+      0,
+      "MODEL"
+    ],
+    [
+      77,
+      15,
+      5,
+      52,
+      0,
+      "ANY"
+    ],
+    [
+      79,
+      15,
+      3,
+      52,
+      1,
+      "IMAGE"
+    ],
+    [
+      187,
+      15,
+      1,
+      32,
+      3,
+      "LATENT"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.47362440744770373,
+      "offset": [
+        -12260.903902361983,
+        -2463.191613559316
+      ]
+    },
+    "frontendVersion": "1.45.20"
+  },
+  "version": 0.4
+}

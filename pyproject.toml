@@ -1,7 +1,7 @@
 [project]
 name = "editutils"
 description = "A collection of utility nodes for advanced image editing in ComfyUI, supporting multiple AI models including Qwen and Flux2Klein."
-version = "1.1.4"
+version = "1.1.5"
 license = {file = "LICENSE"}
 
 [project.urls]

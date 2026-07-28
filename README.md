@@ -15,6 +15,9 @@ ComfyUI-EditUtils is the follow-up version of ComfyUI-QwenEditUtils, offering en
 RunningHub Single Image Workflow:
 https://www.runninghub.ai/post/2045207600739913729/?inviteCode=rh-v1279
 
+RunningHub Simple Krea2 Depth Workflow (工作流：Simple Krea Depth):
+https://www.runninghub.ai/post/2082077636234313729/?inviteCode=rh-v1279
+
 ## Usage Tips
 
 For better consistency in local editing, it's recommended to use this workflow with Consistency Edit LoRA:
@@ -24,11 +27,13 @@ For better consistency in local editing, it's recommended to use this workflow w
 
 ## Workflows
 
-The plugin includes several example workflows:
+Example workflows are available in the [workflows](workflows/) directory:
 
-- **f2k edit simple.json** - Simple workflow recommended for common usage (easy to use)
-- **f2k edit single.json** - Highly customizable workflow for ComfyUI expert users
-- **f2k edit multiple.json** - Highly customizable workflow for ComfyUI expert users with multiple image support
+- **[Simple Krea2 Depth.json](workflows/Simple%20Krea2%20Depth.json)** - Simple Krea2 editing workflow with a depth LoRA. Wires `LoadImage → Krea2ModelConfig_EditUtils → EditTextEncode_EditUtils → Krea2EditApply_EditUtils → KSampler`, loading the model via `UNETLoader + LoraLoaderModelOnly` — the reference latent flows through the conditioning chain automatically.
+  - Online version on RunningHub: https://www.runninghub.ai/post/2082077636234313729/?inviteCode=rh-v1279
+  - Depth LoRA download: [Krea2 Depth LoRA (Civitai)](https://civitai.com/models/2815790/krea2-depth-lrzjason-20260729)
+
+> ⚠️ **Note:** Krea2 edit support is still in development — node interfaces and behavior may change.
 
 ## Capabilities
 
