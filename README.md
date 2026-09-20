@@ -1,6 +1,6 @@
 # ComfyUI-EditUtils
 
-A collection of utility nodes for advanced image editing in ComfyUI, supporting multiple AI models including Qwen and Flux2Klein.
+A collection of utility nodes for advanced image editing in ComfyUI, supporting multiple AI models including Qwen, Qwen-Image 2.1, Flux2Klein and Krea2.
 
 ## Update
 20260920 Added Qwen-Image 2.1 support (QwenImage21ModelConfig / QwenImage21ConfigPreparer / QwenImage21EditTextEncode / QwenImage21EditApply). 64ch 16x VAE, Qwen3-VL text encoder, vision-slot latent splicing and per-reference ROPE offsets. Example workflow: [Simple QwenImage 2.1 Edit.json](workflows/Simple%20QwenImage%202.1%20Edit.json). Requires ComfyUI with upstream Qwen-Image 2.1 support.
@@ -25,6 +25,41 @@ For better consistency in local editing, it's recommended to use this workflow w
 
 - Civitai Download: [Consistency Edit LoRA](https://civitai.com/models/1939453?modelVersionId=2634354)
 - Huggingface Download: [Consistency Edit LoRA](https://huggingface.co/lrzjason/Consistance_Edit_Lora)
+
+## Qwen-Image 2.1
+
+EditUtils supports **Qwen-Image 2.1** editing with up to 3 references in the simple path (unlimited via the config chain). Qwen-Image 2.1 works differently from Qwen-Image 1.0, and the qwen21 nodes handle the differences for you:
+
+- **Qwen3-VL text encoder**: prompt and reference images are encoded together; each reference latent is spliced into the text sequence at the encoder's vision slots (`image_slots`) — no `Picture n:` prompt prefix needed.
+- **New VAE**: 64-channel latents with 16x spatial downscale (RGBA-aware). References are aligned to **32-pixel multiples** so every vision slot maps onto a 2x2 group of latent tokens.
+- **Unified reference resize**: the vision tower and the VAE consume the *same* resized image (alpha composited over white for the encoder, full RGBA for the VAE), so there is no separate `vl_target_size` pipeline.
+
+**Nodes:**
+
+| Node | Purpose |
+|---|---|
+| `QwenImage21ModelConfig_EditUtils` | Model config (`qwen_image21` route, `vae_unit=32`). Empty instruction = built-in T2I template; custom instruction = custom system prompt. |
+| `QwenImage21ConfigPreparer_EditUtils` | Per-image config: `to_ref`, `ref_main_image`, `ref_longest_edge` (32-aligned), `ref_crop`, `mask`, `rope_x_offset / rope_y_offset`. Chain multiple nodes for multiple references. |
+| `QwenImage21EditTextEncode_EditUtils` | One-node simple path (image1–3), same outputs as `EditTextEncode_EditUtils`. |
+| `QwenImage21EditApply_EditUtils` | Optional model patch enabling per-reference ROPE offsets (regional editing). Connect only the model wire — offsets flow through the conditioning chain. |
+
+**Wiring** (see [Simple QwenImage 2.1 Edit.json](workflows/Simple%20QwenImage%202.1%20Edit.json)):
+
+```
+CheckpointLoaderSimple ─ CLIP/VAE ────────┐
+        │ MODEL                            ▼
+        └─► QwenImage21EditApply ─► KSampler ─► VAEDecode ─► CropWithPadInfo ─► SaveImage
+QwenImage21ModelConfig ──┐
+QwenImage21ConfigPreparer ─┴─► EditTextEncode_EditUtils ─► conditioning/latent ─► KSampler
+```
+
+**Notes:**
+
+- Requires a ComfyUI build with upstream Qwen-Image 2.1 support (the `qwen_image21` model); on older builds the model won't load and the EditApply node passes the model through unchanged.
+- The main image's padded latent is the sampling start latent; use `pad_info → CropWithPadInfo_EditUtils` after decode to get the unpadded result (same flow as the Qwen 1.0 path).
+- `rope_x_offset / rope_y_offset` only take effect with `QwenImage21EditApply_EditUtils` in the graph; with all offsets at zero the model runs its native path (prefix KV cache unaffected).
+- Keep `to_vl` enabled on the Config Preparer — disabling it splices the reference after the text sequence, which is an untrained path.
+- Suggested starting point: Euler / Simple, ~20 steps, CFG 1.0 (as wired in the example workflow).
 
 ## Workflows
 
@@ -145,7 +180,7 @@ A utility node that generates a mask highlighting the differences between two im
 
 ### ComfyUI-EditUtils vs ComfyUI-QwenEditUtils
 ComfyUI-EditUtils is the follow-up version of ComfyUI-QwenEditUtils with the following improvements:
-- Multi-model support (Qwen and Flux2Klein)
+- Multi-model support (Qwen, Qwen-Image 2.1, Flux2Klein, Boogu and Krea2)
 - Unified node architecture with configuration nodes
 - Enhanced flexibility and modularity
 - Improved code organization and maintainability
