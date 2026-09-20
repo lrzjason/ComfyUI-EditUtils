@@ -344,6 +344,40 @@ class Krea2ModelConfig_EditUtils:
         config["llama_template"] = get_system_prompt(instruction)
         return (config,)
 
+class QwenImage21ModelConfig_EditUtils:
+    # Qwen-Image 2.1 uses a Qwen3-VL text encoder and a 16x spatial-downscale
+    # VAE (64 latent channels). The reference latents are spliced into the text
+    # sequence at the vision slots, so the vision-tower image and the VAE image
+    # must be the SAME resized tensor: vae_unit is 32 (16x VAE x 2, so every
+    # vision slot covers one 2x2 group of latent tokens).
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "optional": {
+                "instruction": ("STRING", {"multiline": True, "default": ""}),
+            }
+        }
+
+    RETURN_TYPES = ("DICT",)
+    RETURN_NAMES = ("model_config",)
+    FUNCTION = "configure_model"
+
+    CATEGORY = "advanced/conditioning"
+
+    def configure_model(self, instruction=""):
+        config = {
+            "model_name": "qwen_image21",
+            "vae_unit": 32,
+            "llama_template": ""
+        }
+        # default: no template -> the QwenImage21 tokenizer auto-builds the
+        # "Comprehend and analyze the provided prompt." T2I template with the
+        # vision blocks inserted before the prompt. A custom instruction gets a
+        # custom system prompt; the encode node inserts the vision blocks at {}.
+        if instruction != "":
+            config["llama_template"] = get_system_prompt(instruction)
+        return (config,)
+
 class EditTextEncode_EditUtils:
     # upscale_methods = ["lanczos", "bicubic", "area"]
     # crop_methods = ["pad", "center", "disabled"]
@@ -412,6 +446,7 @@ class EditTextEncode_EditUtils:
         # llama_template = get_system_prompt(instruction)
         model_name = model_config["model_name"] if "model_name" in model_config else None
         is_qwen = model_name == "qwen"
+        is_qwen21 = model_name == "qwen_image21"
         is_boogu = model_name == "boogu"
         vae_unit = model_config["vae_unit"] if "vae_unit" in model_config else 8
         llama_template = model_config["llama_template"] if "llama_template" in model_config else ""
@@ -571,6 +606,15 @@ class EditTextEncode_EditUtils:
                 vl_target_size = image_obj["vl_target_size"]
                 vl_crop = image_obj["vl_crop"]
                 vl_upscale = image_obj["vl_upscale"]
+            elif is_qwen21:
+                # Qwen-Image 2.1: the vision-tower input is the resized reference
+                # itself, so there is no separate vl resize/crop pipeline.
+                to_vl = image_obj.get("to_vl", True)
+                if to_vl and not to_ref:
+                    print("QwenImage21: to_vl without to_ref would break vision-slot alignment; forcing to_ref=True")
+                    to_ref = True
+                elif to_ref and not to_vl:
+                    print("QwenImage21: reference without vision slot will splice after the text sequence (untrained path)")
             else:
                 to_vl = false
             
@@ -690,13 +734,26 @@ class EditTextEncode_EditUtils:
                         noise_mask = m[:, :1, :, :].squeeze(1)
                         print("noise_mask.shape", noise_mask.shape)
                 image = s.movedim(1, -1)
-                ref_latents.append(vae.encode(image[:, :, :, :3]))
+                if is_qwen21:
+                    # Qwen-Image 2.1's VAE is RGBA (64ch / 16x downscale): keep all
+                    # four channels — plain RGB gets an opaque alpha padded in by
+                    # ComfyUI. The vision tower consumes the same resize composited
+                    # over white, so every vision slot maps to a 2x2 latent group.
+                    ref_latents.append(vae.encode(image))
+                else:
+                    ref_latents.append(vae.encode(image[:, :, :, :3]))
                 rope_offsets.append((
                     image_obj.get("rope_x_offset", 0),
                     image_obj.get("rope_y_offset", 0)
                 ))
                 vae_images.append(image)
-            if to_vl:
+                if is_qwen21 and to_vl:
+                    rgb = image[:, :, :, :3]
+                    if image.shape[-1] > 3:
+                        # the vision tower sees alpha composited over white, the vae keeps all four
+                        rgb = rgb * image[:, :, :, 3:] + (1.0 - image[:, :, :, 3:])
+                    vl_images.append(rgb)
+            if to_vl and not is_qwen21:
                 if vl_resize:
                     # print("vl_resize")
                     total = int(vl_target_size * vl_target_size)
@@ -720,19 +777,33 @@ class EditTextEncode_EditUtils:
         full_prompt = image_prompt + prompt
         # print("full_prompt", full_prompt)
         # print("llama_template", llama_template)
-        # if is_qwen:
-        #     tokens = clip.tokenize(full_prompt, images=vl_images, llama_template=llama_template)
-        # else:
-        # print("editutils image_prompt", image_prompt)
-        # print("editutils prompt", prompt)
-        # print("editutils llama_template", llama_template)
-        if llama_template == "" or llama_template is None:
+        if is_qwen21:
+            # QwenImage21 tokenizer auto-builds the T2I template ("Comprehend and
+            # analyze the provided prompt.") and inserts the vision blocks before
+            # the prompt; with a custom template they are spliced in at {}.
+            # keep_vision keeps the vision embeddings as plain text conditioning
+            # when no reference latents were encoded (vl-only / text-only mode).
+            if llama_template:
+                if len(vl_images) > 0:
+                    # same splice the QwenImage21 tokenizer uses for its auto template
+                    refs = " ".join("<image{}><|vision_start|><|image_pad|><|vision_end|>".format(j + 1) for j in range(len(vl_images)))
+                    llama_template = llama_template.replace("{}", refs + "{}", 1)
+                tokens = clip.tokenize(prompt, images=vl_images, llama_template=llama_template,
+                                       keep_vision=(len(ref_latents) == 0), prevent_empty_text=True)
+            else:
+                tokens = clip.tokenize(prompt, images=vl_images,
+                                       keep_vision=(len(ref_latents) == 0), prevent_empty_text=True)
+        elif llama_template == "" or llama_template is None:
             tokens = clip.tokenize(full_prompt, images=vl_images)
         else:
             tokens = clip.tokenize(full_prompt, images=vl_images, llama_template=llama_template)
         # print("editutils tokens", tokens)
         conditioning = clip.encode_from_tokens_scheduled(tokens)
-        samples = torch.zeros(1, 4, 128, 128)
+        if is_qwen21:
+            # 64 latent channels @ 16x spatial downscale
+            samples = torch.zeros(1, 64, 128, 128)
+        else:
+            samples = torch.zeros(1, 4, 128, 128)
         # conditioning_only_with_main_ref = None
         conditioning_full_refs = conditioning
         if len(ref_latents) > 0:
@@ -765,7 +836,7 @@ class EditTextEncode_EditUtils:
             "no_refs_cond": conditioning,
             "mask": noise_mask,
         }
-        if is_qwen:
+        if is_qwen or is_qwen21:
             custom_output["vl_images"] = vl_images
             custom_output["full_prompt"] = full_prompt
         
@@ -1175,6 +1246,76 @@ class QwenConfigPreparer_EditUtils:
         
         config_output.append(config)
         # print("len(configs)", len(configs))
+        return (config_output, config, )
+
+class QwenImage21ConfigPreparer_EditUtils:
+    # Per-image config for Qwen-Image 2.1. There is no separate vl pipeline:
+    # the vision-tower input is the resized reference itself, so every image
+    # is aligned to 32-pixel multiples (16x VAE downscale x 2, keeping each
+    # vision slot mapped onto a 2x2 group of latent tokens).
+    upscale_methods = ["lanczos", "bicubic", "area"]
+    crop_methods = ["pad", "center", "disabled"]
+    resize_modes = ["longest_edge", "area"]
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required":
+            {
+                "image": ("IMAGE", ),
+            },
+            "optional":
+            {
+                "configs": ("LIST", {"default": None, "tooltip": "Configs list"}),
+                "to_ref": ("BOOLEAN", {"default": True, "tooltip": "Add image to reference latent"}),
+                "ref_main_image": ("BOOLEAN", {"default": True, "tooltip": "Set image as main image which would return the latent as output."}),
+                "ref_longest_edge": ("INT", {"default": 1024, "min": 32, "max": 4096, "step": 32, "tooltip": "Reference target size. Snapped to 32-pixel multiples (vision slot <-> 2x2 latent group alignment)."}),
+                "ref_crop": (s.crop_methods, {"default": "pad", "tooltip": "Crop method for reference image"}),
+                "ref_upscale": (s.upscale_methods, {"default": "lanczos", "tooltip": "Upscale method for reference image"}),
+                "to_vl": ("BOOLEAN", {"default": True, "tooltip": "Feed the resized reference to the Qwen3-VL text encoder and splice its latent at the vision slot. Keep enabled for trained behavior."}),
+                "mask": ("MASK", ),
+                "ref_resize_mode": (s.resize_modes, {"default": "longest_edge", "tooltip": "longest_edge: scale so the longest dimension equals ref_longest_edge. area: scale so total pixels equals ref_longest_edge squared."}),
+                "rope_x_offset": ("INT", {"default": 0, "min": 0, "max": 4096, "step": 8, "tooltip": "ROPE horizontal position offset in pixels (32-aligned). Shifts reference rightward on the canvas. Requires QwenImage21EditApply_EditUtils."}),
+                "rope_y_offset": ("INT", {"default": 0, "min": 0, "max": 4096, "step": 8, "tooltip": "ROPE vertical position offset in pixels (32-aligned). Shifts reference downward on the canvas. Requires QwenImage21EditApply_EditUtils."}),
+            }
+        }
+
+    RETURN_TYPES = ("LIST", "ANY", )
+    RETURN_NAMES = ("configs", "config", )
+    FUNCTION = "prepare_config"
+
+    CATEGORY = "advanced/conditioning"
+    def prepare_config(self, image, configs=None,
+                to_ref=True, ref_main_image=True, ref_longest_edge=1024, ref_crop="pad", ref_upscale="lanczos",
+                to_vl=True, mask=None, ref_resize_mode="longest_edge", rope_x_offset=0, rope_y_offset=0
+        ):
+        if configs is None:
+            configs = []
+        config = {
+            "image": image,
+            "to_ref": to_ref,
+            "ref_main_image": ref_main_image,
+            "ref_longest_edge": ref_longest_edge,
+            "ref_crop": ref_crop,
+            "ref_upscale": ref_upscale,
+            "ref_resize_mode": ref_resize_mode,
+            "to_vl": to_vl,
+            "rope_x_offset": rope_x_offset,
+            "rope_y_offset": rope_y_offset,
+        }
+
+        config_output = copy.deepcopy(configs)
+
+        if mask is not None:
+            # check mask height,width equals image height,width
+            if mask.shape[1] != image.shape[1] or mask.shape[2] != image.shape[2]:
+                print("mask height,width not equals image height,width, skipping mask")
+                mask = None
+            config["mask"] = mask
+
+        del configs
+
+        config_output.append(config)
         return (config_output, config, )
 
 class QwenEditOutputExtractor_EditUtils:
@@ -1865,6 +2006,100 @@ class QwenEditTextEncode_EditUtils:
         if len(configs) == 0:
             raise ValueError("At least one image must be provided")
         
+        # Call the original EditTextEncode function
+        node_instance = EditTextEncode_EditUtils()
+        return node_instance.encode(
+            clip=clip,
+            vae=vae,
+            prompt=prompt,
+            model_config=model_config,
+            configs=configs
+        )
+
+
+class QwenImage21EditTextEncode_EditUtils:
+    # Qwen-Image 2.1 edit text encode: up to 3 reference images through the
+    # QwenImage21 branch (same resize for the Qwen3-VL vision tower and the
+    # 16x VAE, 64ch latents, image_slots spliced conditioning).
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "clip": ("CLIP", ),
+                "vae": ("VAE", ),
+                "prompt": ("STRING", {"multiline": True, "dynamicPrompts": True}),
+            },
+            "optional": {
+                "image1": ("IMAGE", ),
+                "image2": ("IMAGE", ),
+                "image3": ("IMAGE", ),
+                "ref_longest_edge": ("INT", {"default": 1024, "min": 32, "max": 4096, "step": 32, "tooltip": "Reference target size. Snapped to 32-pixel multiples."}),
+                "mask": ("MASK", ),
+            }
+        }
+
+    RETURN_TYPES = ("CONDITIONING", "LATENT", "ANY", "IMAGE", "MASK")
+    RETURN_NAMES = ("conditioning", "latent", "custom_output", "main_image", "mask")
+    FUNCTION = "encode"
+
+    CATEGORY = "advanced/conditioning"
+
+    def encode(self, clip, vae, prompt,
+               image1=None, image2=None, image3=None,
+               mask=None,
+               ref_longest_edge=1024):
+        # Prepare model config: default template is auto-built by the
+        # QwenImage21 tokenizer (no custom system prompt).
+        model_config = {
+            "model_name": "qwen_image21",
+            "instruction": "",
+            "vae_unit": 32,
+            "llama_template": ""
+        }
+
+        # Prepare configs list
+        configs = []
+
+        # Process each image if provided
+        if image1 is not None:
+            config1 = {
+                "image": image1,
+                "to_ref": True,
+                "ref_main_image": True,  # First image is main by default
+                "ref_longest_edge": ref_longest_edge,
+                "ref_crop": "pad",
+                "ref_upscale": "lanczos",
+                "to_vl": True,
+            }
+            if mask is not None:
+                config1["mask"] = mask
+            configs.append(config1)
+
+        if image2 is not None:
+            configs.append({
+                "image": image2,
+                "to_ref": True,
+                "ref_main_image": False,
+                "ref_longest_edge": ref_longest_edge,
+                "ref_crop": "pad",
+                "ref_upscale": "lanczos",
+                "to_vl": True,
+            })
+
+        if image3 is not None:
+            configs.append({
+                "image": image3,
+                "to_ref": True,
+                "ref_main_image": False,
+                "ref_longest_edge": ref_longest_edge,
+                "ref_crop": "pad",
+                "ref_upscale": "lanczos",
+                "to_vl": True,
+            })
+
+        if len(configs) == 0:
+            raise ValueError("At least one image must be provided")
+
         # Call the original EditTextEncode function
         node_instance = EditTextEncode_EditUtils()
         return node_instance.encode(
@@ -3307,6 +3542,151 @@ class QwenImageEditApply_EditUtils:
 
 
 # ---------------------------------------------------------------------------
+# QwenImage 2.1 ROPE position control (model patch)
+# ---------------------------------------------------------------------------
+
+def _editutils_qwen21_build_sequence(dit, x, context, ref_latents, image_slots, rope_offsets=None):
+    """Reimplementation of comfy.ldm.qwen_image21 model build_sequence with
+    per-reference ROPE offsets added (offsets are in latent-token units).
+
+    Faithful to upstream comfy/ldm/qwen_image21/model.py: text split at each
+    vision slot with the reference latents spliced in, target image last;
+    reference rope ids centred on the target with a half-token shift where the
+    reference grid has the other parity. Only difference: hh/ww get the offset.
+    """
+    txt = dit.txt_in(context)
+    ref_latents = list(ref_latents or [])
+    slots = (list(image_slots or []) + [txt.shape[1]] * len(ref_latents))[:len(ref_latents)]
+    bounds = [0] + slots + [txt.shape[1]]
+
+    parts, ids, segments = [], [], []
+    pos, length = 0, 0
+    for i, ((start, end), img) in enumerate(zip(zip(bounds[:-1], bounds[1:]), ref_latents + [x])):
+        n = end - start
+        if n > 0:
+            parts.append(txt[:, start:end])
+            ids.append(torch.arange(pos, pos + n, device=x.device, dtype=torch.float32).unsqueeze(1).expand(n, 3))
+            segments.append((length, length + n, torch.ones((n, length + n), dtype=torch.bool, device=x.device).tril(length)))
+            pos += n
+            length += n
+        h, w = img.shape[-2:]
+        parts.append(dit.img_in(img.flatten(2).transpose(1, 2)))
+        x_off, y_off = rope_offsets[i] if rope_offsets is not None and i < len(rope_offsets) else (0, 0)
+        # half a token where a reference grid has the other parity, so it centres on the target
+        hh = torch.arange(h, device=x.device, dtype=torch.float32) - (h - h // 2) + 0.5 * (h % 2 - x.shape[-2] % 2) + y_off
+        ww = torch.arange(w, device=x.device, dtype=torch.float32) - (w - w // 2) + 0.5 * (w % 2 - x.shape[-1] % 2) + x_off
+        ids.append(torch.stack([torch.full((h, w), pos, device=x.device, dtype=torch.float32),
+                                hh[:, None].expand(h, w), ww[None, :].expand(h, w)], dim=-1).flatten(0, 1))
+        segments.append((length, length + h * w, None))
+        pos += max(h, w)
+        length += h * w
+
+    pe = dit.pe_embedder(torch.cat(ids, dim=0).unsqueeze(0)).transpose(1, 2).contiguous()
+    return torch.cat(parts, dim=1), pe, segments
+
+
+class QwenImage21EditApply_EditUtils:
+    """Patch a QwenImage21 model to use per-reference ROPE position offsets.
+
+    The QwenImage 2.1 DiT natively splices reference latents into the text
+    sequence at the vision slots (image_slots) and centres their rope ids on
+    the target image. This node additionally shifts each reference's rope
+    positions by per-reference pixel offsets from the EditUtils conditioning
+    chain (rope_x_offset / rope_y_offset), enabling regional editing.
+    """
+
+    # latent tokens per 16 latent-channel VAE unit; rope offsets are given in pixels
+    LATENT_DOWNSCALE = 16
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+            },
+            "optional": {
+                "debug_log": ("BOOLEAN", {"default": False}),
+            },
+        }
+
+    RETURN_TYPES = ("MODEL",)
+    RETURN_NAMES = ("model",)
+    FUNCTION = "apply_patch"
+    CATEGORY = "QwenImage/edit"
+    DESCRIPTION = (
+        "Apply per-reference ROPE position offsets to a QwenImage 2.1 model. "
+        "Connect only the model wire — rope offsets flow through the "
+        "EditUtils conditioning chain automatically."
+    )
+
+    def apply_patch(self, model, debug_log=False):
+        # Detect QwenImage21 models via the detected unet config
+        model_config = getattr(model.model, "model_config", None)
+        unet_config = getattr(model_config, "unet_config", None) or {}
+        dit = getattr(model.model, "diffusion_model", None)
+        is_qwen_image21 = (
+            isinstance(unet_config, dict)
+            and unet_config.get("image_model") == "qwen_image21"
+            and dit is not None
+            and hasattr(dit, "build_sequence")
+            and hasattr(dit, "pe_embedder")
+        )
+        if not is_qwen_image21:
+            print("QwenImage21EditApply_EditUtils: model is not QwenImage21, skipping patch. "
+                  "(Requires ComfyUI with Qwen-Image 2.1 support.)")
+            return (model,)
+
+        m = model.clone()
+        dit = m.get_model_object("diffusion_model")
+        setattr(dit, "_editutils_qwen21_rope_debug", bool(debug_log))
+
+        self._apply_qwen_image21_rope_patch(m, dit)
+        return (m,)
+
+    @staticmethod
+    def _apply_qwen_image21_rope_patch(model_patcher, dit):
+        """Install ROPE offset patch for QwenImage21 models."""
+        base_model = model_patcher.model
+        orig_extra_conds = base_model.extra_conds
+        orig_forward = dit.forward
+        orig_build_sequence = dit.build_sequence
+
+        # --- extra_conds: extract rope offsets from conditioning ---
+        def extra_conds(**kwargs):
+            out = orig_extra_conds(**kwargs)
+            rope_offsets = kwargs.get("reference_rope_offsets", None)
+            if rope_offsets is not None:
+                out["ref_rope_offsets"] = comfy.conds.CONDConstant(rope_offsets)
+            return out
+
+        # --- forward: stash the per-ref offsets for build_sequence ---
+        def forward(x, timesteps, context, ref_latents=None, image_slots=None,
+                    transformer_options={}, **kwargs):
+            setattr(dit, "_editutils_qwen21_rope_offsets", kwargs.get("ref_rope_offsets", None))
+            return orig_forward(x, timesteps, context,
+                                ref_latents=ref_latents,
+                                image_slots=image_slots,
+                                transformer_options=transformer_options, **kwargs)
+
+        # --- build_sequence: apply the stashed offsets when present ---
+        def build_sequence(x, context, ref_latents, image_slots):
+            offsets = getattr(dit, "_editutils_qwen21_rope_offsets", None)
+            if offsets is None or all((int(o[0]), int(o[1])) == (0, 0) for o in offsets):
+                # zero offsets: native path, keeps upstream behavior and prefix cache
+                return orig_build_sequence(x, context, ref_latents, image_slots)
+            if getattr(dit, "_editutils_qwen21_rope_debug", False):
+                print(f"[QwenImage21EditApply] rope offsets (px): {offsets}")
+            latent_offsets = [(o[0] / QwenImage21EditApply_EditUtils.LATENT_DOWNSCALE,
+                               o[1] / QwenImage21EditApply_EditUtils.LATENT_DOWNSCALE) for o in offsets]
+            return _editutils_qwen21_build_sequence(dit, x, context, ref_latents, image_slots,
+                                                    rope_offsets=latent_offsets)
+
+        model_patcher.add_object_patch("extra_conds", extra_conds)
+        model_patcher.add_object_patch("diffusion_model.forward", forward)
+        model_patcher.add_object_patch("diffusion_model.build_sequence", build_sequence)
+
+
+# ---------------------------------------------------------------------------
 # Boogu ROPE position control (model patch)
 # ---------------------------------------------------------------------------
 
@@ -3412,9 +3792,12 @@ NODE_CLASS_MAPPINGS = {
     "Flux2KleinOutputExtractor_EditUtils": Flux2KleinOutputExtractor_EditUtils,
     "BooguModelConfig_EditUtils": BooguModelConfig_EditUtils,
     "Krea2ModelConfig_EditUtils": Krea2ModelConfig_EditUtils,
+    "QwenImage21ModelConfig_EditUtils": QwenImage21ModelConfig_EditUtils,
     "BooguConfigPreparer_EditUtils": BooguConfigPreparer_EditUtils,
     "BooguEditTextEncode_EditUtils": BooguEditTextEncode_EditUtils,
     "BooguOutputExtractor_EditUtils": BooguOutputExtractor_EditUtils,
+    "QwenImage21ConfigPreparer_EditUtils": QwenImage21ConfigPreparer_EditUtils,
+    "QwenImage21EditTextEncode_EditUtils": QwenImage21EditTextEncode_EditUtils,
     "ConfigJsonParser_EditUtils": ConfigJsonParser_EditUtils,
     "ListExtractor_EditUtils": ListExtractor_EditUtils,
     "Any2Image_EditUtils": Any2Image_EditUtils,
@@ -3431,6 +3814,7 @@ NODE_CLASS_MAPPINGS = {
     "Krea2EditApply_EditUtils": Krea2EditApply_EditUtils,
     "Flux2KleinEditApply_EditUtils": Flux2KleinEditApply_EditUtils,
     "QwenImageEditApply_EditUtils": QwenImageEditApply_EditUtils,
+    "QwenImage21EditApply_EditUtils": QwenImage21EditApply_EditUtils,
     "BooguEditApply_EditUtils": BooguEditApply_EditUtils,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -3448,9 +3832,12 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "Flux2KleinOutputExtractor_EditUtils": "EditUtils: Flux2Klein Output Extractor lrzjason",
     "BooguModelConfig_EditUtils": "EditUtils: Boogu Model Config lrzjason",
     "Krea2ModelConfig_EditUtils": "EditUtils: Krea2 Model Config lrzjason",
+    "QwenImage21ModelConfig_EditUtils": "EditUtils: QwenImage 2.1 Model Config lrzjason",
     "BooguConfigPreparer_EditUtils": "EditUtils: Boogu Config Preparer lrzjason",
     "BooguEditTextEncode_EditUtils": "EditUtils: Boogu Edit Text Encode lrzjason",
     "BooguOutputExtractor_EditUtils": "EditUtils: Boogu Output Extractor lrzjason",
+    "QwenImage21ConfigPreparer_EditUtils": "EditUtils: QwenImage 2.1 Config Preparer lrzjason",
+    "QwenImage21EditTextEncode_EditUtils": "EditUtils: QwenImage 2.1 Edit Text Encode lrzjason",
     "ConfigJsonParser_EditUtils": "EditUtils: Config Json Parser lrzjason",
     "ListExtractor_EditUtils": "EditUtils: List Extractor lrzjason",
     "Any2Image_EditUtils": "EditUtils: Any2Image lrzjason",
@@ -3467,5 +3854,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "Krea2EditApply_EditUtils": "EditUtils: Krea2 Edit Apply (Model Patch) lrzjason",
     "Flux2KleinEditApply_EditUtils": "EditUtils: Flux2Klein Edit Apply (ROPE Control) lrzjason",
     "QwenImageEditApply_EditUtils": "EditUtils: QwenImage Edit Apply (ROPE Control) lrzjason",
+    "QwenImage21EditApply_EditUtils": "EditUtils: QwenImage 2.1 Edit Apply (ROPE Control) lrzjason",
     "BooguEditApply_EditUtils": "EditUtils: Boogu Edit Apply (ROPE Control) lrzjason",
 }

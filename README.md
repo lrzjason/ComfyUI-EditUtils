@@ -3,6 +3,7 @@
 A collection of utility nodes for advanced image editing in ComfyUI, supporting multiple AI models including Qwen and Flux2Klein.
 
 ## Update
+20260920 Added Qwen-Image 2.1 support (QwenImage21ModelConfig / QwenImage21ConfigPreparer / QwenImage21EditTextEncode / QwenImage21EditApply). 64ch 16x VAE, Qwen3-VL text encoder, vision-slot latent splicing and per-reference ROPE offsets. Example workflow: [Simple QwenImage 2.1 Edit.json](workflows/Simple%20QwenImage%202.1%20Edit.json). Requires ComfyUI with upstream Qwen-Image 2.1 support.
 20260504 Added Longest Edge Image Process, Clear Ref Latents, Save/Load Condition nodes. Fixed no_refs_cond output in Output Extractors.
 20260407 Fixed Extra Height Unit Pad Which Introduce Color Shift
 
@@ -29,6 +30,10 @@ For better consistency in local editing, it's recommended to use this workflow w
 
 Example workflows are available in the [workflows](workflows/) directory:
 
+- **[Simple QwenImage 2.1 Edit.json](workflows/Simple%20QwenImage%202.1%20Edit.json)** - Qwen-Image 2.1 editing workflow. Wires `CheckpointLoaderSimple → QwenImage21EditApply_EditUtils → KSampler` and `EditTextEncode_EditUtils` with `QwenImage21ModelConfig_EditUtils + QwenImage21ConfigPreparer_EditUtils`, with `VAEDecode → CropWithPadInfo_EditUtils` to undo the main-image padding.
+  - The reference latent is spliced into the text sequence at the vision slots (`image_slots`); the 2.1 VAE is 64-channel with 16x spatial downscale, so references align to 32-pixel multiples.
+  - `rope_x_offset / rope_y_offset` on the Config Preparer shift a reference's position on the canvas when the model is patched with `QwenImage21EditApply_EditUtils` (regional editing).
+  - Load the model with `CheckpointLoaderSimple` (all-in-one checkpoint) — requires ComfyUI with upstream Qwen-Image 2.1 support.
 - **[Simple Krea2 Depth.json](workflows/Simple%20Krea2%20Depth.json)** - Simple Krea2 editing workflow with a depth LoRA. Wires `LoadImage → Krea2ModelConfig_EditUtils → EditTextEncode_EditUtils → Krea2EditApply_EditUtils → KSampler`, loading the model via `UNETLoader + LoraLoaderModelOnly` — the reference latent flows through the conditioning chain automatically.
   - Online version on RunningHub: https://www.runninghub.ai/post/2082077636234313729/?inviteCode=rh-v1279
   - Depth LoRA download: [Krea2 Depth LoRA (Civitai)](https://civitai.com/models/2815790/krea2-depth-lrzjason-20260729)
@@ -51,7 +56,7 @@ Documentation:
 
 ## Key Features
 
-- **Multi-Model Support**: Works with both Qwen and Flux2Klein models for versatile image editing
+- **Multi-Model Support**: Works with Qwen, Qwen-Image 2.1, Flux2Klein, Boogu and Krea2 models for versatile image editing
 - **Flexible Configuration**: Per-image configuration options for reference and VL processing
 - **Unified Interface**: Single node EditTextEncode_EditUtils works with multiple models through configuration nodes
 - **Advanced Processing**: Supports complex image editing workflows with multiple reference images

@@ -1,7 +1,7 @@
 # EditUtils 节点参考文档
 
-> 本文档以 `nodes.py` 当前代码（`NODE_CLASS_MAPPINGS`，28 个节点）为准。
-> 显示名均带 `lrzjason` 后缀；节点菜单分类多为 `advanced/conditioning`，图像类节点在 `image`，Krea2 补丁在 `Krea2/edit`。
+> 本文档以 `nodes.py` 当前代码（`NODE_CLASS_MAPPINGS`，37 个节点）为准。
+> 显示名均带 `lrzjason` 后缀；节点菜单分类多为 `advanced/conditioning`，图像类节点在 `image`，模型补丁在 `Krea2/edit` / `QwenImage/edit`。
 > 若文档与代码不符，以代码为准。
 
 ## 目录
@@ -10,7 +10,7 @@
 - [二、文本/图像编码节点（Text Encode）](#二文本图像编码节点text-encode)
 - [三、Config Preparer（configs 链）](#三config-preparerconfigs-链)
 - [四、Output Extractor（custom_output 拆包）](#四output-extractorcustom_output-拆包)
-- [五、Krea2 模型补丁](#五krea2-模型补丁)
+- [五、模型补丁（Krea2 / QwenImage / QwenImage 2.1 / Flux2Klein / Boogu）](#五模型补丁krea2--qwenimage--qwenimage-21--flux2klein--boogu)
 - [六、条件缓存（Save/Load Condition）](#六条件缓存saveload-condition)
 - [七、图像处理与杂项工具](#七图像处理与杂项工具)
 
@@ -78,6 +78,20 @@ Krea2 管线专用配置。固定返回 `{"model_name": "qwen", "vae_unit": 8, "
 - **为什么 model_name 是 `"qwen"`**：Krea2 的文本编码器基于 Qwen、VAE 是 Qwen-Image 的 VAE，因此 `EditTextEncode` 应走 qwen 编码分支（vae_unit=8）；`config_for: "krea2"` 仅作来源标识（日志/调试用）。
 - 配合 Krea2 管线使用：本节点 → `EditTextEncode` → `Krea2EditApply` 打补丁的模型。
 
+### QwenImage21ModelConfig_EditUtils
+
+**显示名**：EditUtils: QwenImage 2.1 Model Config lrzjason
+Qwen-Image 2.1 专用配置：固定 `model_name="qwen_image21"`、`vae_unit=32`、`llama_template=""`。
+
+| 输入 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| instruction | STRING (optional, multiline) | `""` | 留空时 `llama_template=""`（推荐，tokenizer 自动构造 “Comprehend and analyze the provided prompt.” 模板）；非空时构造自定义 system prompt 模板（编码时自动在 `{}` 处插入 vision block） |
+
+- 输出：`model_config` (DICT)。
+- **为什么 vae_unit=32**：Qwen-Image 2.1 的 VAE 是 64 通道、16 倍空间下采样；vision slot 与 2x2 latent 组一一对应，因此参考图要对齐到 32 像素倍数（16×2）。
+- 与 Qwen（1.0）不同：VL 视觉塔输入就是缩放后的参考图本身（无独立 vl 缩放管线）；ref latent 会被拼接进文本序列的 vision slot（`image_slots`）。
+- 需要已支持 Qwen-Image 2.1 的 ComfyUI（上游 `qwen_image21` 支持）才能加载模型。
+
 ---
 
 ## 二、文本/图像编码节点（Text Encode）
@@ -100,10 +114,18 @@ Krea2 管线专用配置。固定返回 `{"model_name": "qwen", "vae_unit": 8, "
 **Qwen / Flux2Klein 路径行为**
 - 对每张 `to_ref` 的图：按 `ref_longest_edge` + `ref_resize_mode` 缩放，按 `vae_unit` 对齐，`ref_crop="pad"` 时黑边补齐到 vae_unit 倍数（主图生成 `pad_info`），然后 `vae.encode` 得到 ref latent。
 - 全部 ref latents 以 `reference_latents` 键挂到 conditioning 上（`node_helpers.conditioning_set_values`），采样模型据此读取。**这就是 EditUtils 条件链。**
-- `latent` 输出 = 主图（`ref_main_image`）的 ref latent；无图时为 1×4×128×128 零 latent。
+- `latent` 输出 = 主图（`ref_main_image`）的 ref latent；无图时为 1×4×128×128 零 latent（qwen_image21 为 1×64×128×128）。
 - Qwen 的 `to_vl` 图还会缩放到 `vl_target_size` 面积喂给 QwenVL，并在 prompt 前自动拼 `Picture n: <|vision_start|>...`；Flux2Klein 忽略 VL（代码中 `to_vl` 强制 False）。
 - 主图带 mask 时，`latent` 附带 `noise_mask`，并从 `mask` 输出返回。
 - 只会有一个主图：后续 config 的 `ref_main_image` 会被强制改为 False；都不设主图时自动取第 0 张并打印提示。
+
+**QwenImage21 路径行为**（`model_name="qwen_image21"`）
+- 每张 `to_ref` 的图按 `ref_longest_edge` + `ref_resize_mode` 缩放并对齐到 **32 像素倍数**（`vae_unit=32`：16 倍 VAE × 2，保证每个 vision slot 对应 2x2 latent 组）。
+- **VL 输入 = 缩放后的参考图本身**（无独立 vl 缩放/裁剪管线）：RGB 通道做白底 alpha 合成喂 Qwen3-VL 文本编码器，完整 RGBA（RGB 输入由 ComfyUI 自动补不透明 alpha）交给 VAE 编码。
+- token 化时不拼 `Picture n:` 前缀：`llama_template` 为空时由 QwenImage21 tokenizer 自动构造 T2I 模板并插入 `<image n><|vision_start|>...`；自定义模板时在 `{}` 处自动插入 vision block。
+- 无 ref latent（纯文本/to_vl only）时 `keep_vision=True`，vision embedding 作为纯文本条件保留；有 ref latent 时不传 vision token、由文本编码器记录 `image_slots`（vision slot 在文本序列中的位置）， DiT 在这些位置拼接参考 latent。
+- rope 偏移随条件链（`reference_rope_offsets`）传递，配合 `QwenImage21EditApply_EditUtils` 生效。
+- 需要 ComfyUI 已内置 Qwen-Image 2.1 支持（上游 `qwen_image21`）。
 
 **Boogu 路径行为**（早返回）
 - prompt 与 vl 图一起 `clip.tokenize(prompt, images=images_vl)`（Boogu tokenizer 自动选 system prompt，忽略 llama_template）。
@@ -127,6 +149,24 @@ Qwen 简易一体化编码节点（内部构造固定 config 后调用 EditTextE
 
 - 内部固定参数：`ref_crop="pad"`、`ref_upscale="lanczos"`、VL 开（resize 开、vl_target_size=384、center/bicubic 中 upscale 实为 `lanczos`）、image1 为主图。
 - 输出：`conditioning` / `latent` / `custom_output` / `main_image` / `mask`（与 EditTextEncode 一致，无 `pad_info` 输出端口——它在 custom_output 里）。
+
+### QwenImage21EditTextEncode_EditUtils
+
+**显示名**：EditUtils: QwenImage 2.1 Edit Text Encode lrzjason
+Qwen-Image 2.1 简易一体化编码节点（内部构造固定 config 后调用 EditTextEncode 的 qwen_image21 分支），最多 3 张图。
+
+| 输入 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| clip | CLIP | — | Qwen3-VL 文本编码器 |
+| vae | VAE | — | Qwen-Image 2.1 VAE（64 通道，16 倍下采样） |
+| prompt | STRING (multiline) | — | 编辑指令 |
+| image1/2/3 | IMAGE (optional) | None | 至少接 image1，否则报错 |
+| ref_longest_edge | INT (32–4096, step 32) | 1024 | 参考目标尺寸（自动对齐 32 像素倍数） |
+| mask | MASK (optional) | None | 仅作用于 image1 |
+
+- 内部固定参数：`ref_crop="pad"`、`ref_upscale="lanczos"`、`to_vl=True`、`vae_unit=32`、`llama_template=""`（自动 T2I 模板）、image1 为主图。
+- 输出：`conditioning` / `latent` / `custom_output` / `main_image` / `mask`。
+- 需要已支持 Qwen-Image 2.1 的 ComfyUI。
 
 ### Flux2KleinEditTextEncode_EditUtils
 
@@ -192,6 +232,28 @@ Boogu 简易一体化编码节点，直接输出正负双条件。
 | ref_resize_mode | COMBO: `longest_edge`/`area` | `longest_edge` | longest_edge=最长边对齐；area=总面积对齐 ref_longest_edge² |
 
 - 输出：`configs` (LIST) · `config` (ANY，当前图的配置)。
+
+### QwenImage21ConfigPreparer_EditUtils
+
+**显示名**：EditUtils: QwenImage 2.1 Config Preparer lrzjason
+Qwen-Image 2.1 每图配置。**无独立 VL 参数**（VL 输入就是缩放后的参考图本身）。
+
+| 输入 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| image | IMAGE | — | |
+| configs | LIST (optional) | None | 上游 configs 链 |
+| to_ref | BOOLEAN | True | 是否进参考 latent |
+| ref_main_image | BOOLEAN | True | 是否主图 |
+| ref_longest_edge | INT (32–4096, step 32) | 1024 | 对齐到 32 像素倍数（vision slot ↔ 2x2 latent 组） |
+| ref_crop | COMBO: `pad`/`center`/`disabled` | `pad` | |
+| ref_upscale | COMBO | `lanczos` | |
+| to_vl | BOOLEAN | True | 是否把缩放后的参考图喂给 Qwen3-VL 并在其 vision slot 拼接 latent。**建议保持开启**（关闭走未训练路径） |
+| mask | MASK (optional) | None | |
+| ref_resize_mode | COMBO: `longest_edge`/`area` | `longest_edge` | |
+| rope_x_offset / rope_y_offset | INT (0–4096, step 8) | 0 | ROPE 位置偏移（像素，32 对齐）；需配合 `QwenImage21EditApply_EditUtils` |
+
+- 输出：`configs` (LIST) · `config` (ANY)。
+- `to_vl=True` 但 `to_ref=False` 会在编码时被强制改回 `to_ref=True`（并打印提示），否则 vision slot 对不齐。
 
 ### Flux2KleinConfigPreparer_EditUtils
 
@@ -262,7 +324,7 @@ Boogu 简易一体化编码节点，直接输出正负双条件。
 
 ---
 
-## 五、Krea2 模型补丁
+## 五、模型补丁（Krea2 / QwenImage / QwenImage 2.1 / Flux2Klein / Boogu）
 
 ### Krea2EditApply_EditUtils
 
@@ -286,6 +348,22 @@ Boogu 简易一体化编码节点，直接输出正负双条件。
 - **ref_strength 语义**：实现于缓存 forward 内，根据 `transformer_options["sigmas"]` 计算采样进度；`progress >= ref_strength` 时跳过 ref K/V 拼接（数学上等价于无 ref forward）。进度按 sigma 进度而非步数计算。`debug_log=True` 时首次丢弃会打印 `[Krea2EditApply] ref dropped at progress=...`。
 - **用途**：避免 ref latent 过度约束模型——采样前段保留 ref 的结构/身份，后段释放细节与创意。**0.5~0.7 是建议的实验区间**；该调度属于训练分布外（OOD）行为，效果需肉眼验收，不保证所有 prompt/ref 组合都有正面收益。
 - 原独立节点 `Krea2RefKVCache_EditUtils` 已删除，缓存功能由 `ref_kv_cache` 选项内置。
+
+### QwenImage21EditApply_EditUtils
+
+**显示名**：EditUtils: QwenImage 2.1 Edit Apply (ROPE Control) lrzjason
+给 Qwen-Image 2.1 DiT 打 ROPE 位置偏移补丁，实现区域编辑（把参考图“放”到画布指定位置）。**用户只需连 model 线**——rope 偏移通过 EditUtils 条件链（conditioning 上的 `reference_rope_offsets`，来自 Config Preparer 的 `rope_x_offset/rope_y_offset`）自动流入。
+
+| 输入 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| model | MODEL | — | QwenImage 2.1 模型；检测不通过时原样返回并打印提示 |
+| debug_log | BOOLEAN (optional) | False | 打印生效的 rope 偏移 |
+
+- 输出：`model` (MODEL)。
+- 原理：Qwen-Image 2.1 原生把参考 latent 拼接进文本序列（vision slot）并把参考 RoPE 位置以目标为中心排布；本节点在 `build_sequence` 中给每张参考的 h/w 位置 id 加上 `偏移像素 / 16`（latent 单位）。
+- 偏移全为 0 时直接走原生 `build_sequence`（行为与未打补丁一致，前缀 KV 缓存不受影响）。
+- 补丁通过 `model.clone()` + `add_object_patch` 隔离安装：`extra_conds`（透传 `ref_rope_offsets`）、`forward`（暂存偏移）、`build_sequence`（应用偏移）。
+- 需要 ComfyUI 已内置 Qwen-Image 2.1 支持（上游 `qwen_image21`），否则模型本身无法加载为该架构。
 
 ---
 
