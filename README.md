@@ -3,6 +3,7 @@
 A collection of utility nodes for advanced image editing in ComfyUI, supporting multiple AI models including Qwen and Flux2Klein.
 
 ## Update
+20260929 Added Configurable Pad Mode/Color/Noise (pad_mode, pad_color, pad_noise), White Edge Default For Qwen To Reduce Black Edge Amplification
 20260407 Fixed Extra Height Unit Pad Which Introduce Color Shift
 
 ## Overview
@@ -37,6 +38,23 @@ The plugin includes several example workflows:
   - Single and multiple workflows: unlimited images (connect multiple configs)
 
 
+## Pad Edge Control
+
+When `ref_crop` is set to `pad`, the image is padded to a multiple of the VAE unit size. How that padding looks is now configurable per image through `pad_mode`, `pad_color` and `pad_noise` on the config preparer nodes (`QwenConfigPreparer_EditUtils` / `Flux2KleinConfigPreparer_EditUtils`) or the `ConfigJsonParser_EditUtils` JSON:
+
+- **pad_mode** (default: `color`):
+  - `color`: solid fill using `pad_color`
+  - `edge`: replicate the outermost pixel row/column
+  - `mirror`: reflect the content at the boundary
+  - `border_mean`: fill each side with the mean of its nearest 8 pixels
+- **pad_color** (default: `white` for Qwen, `black` for Flux2Klein): named color (`black`, `white`, `gray`, `mid_gray`), hex `#RRGGBB`, or `"r,g,b"`. Any value above 1 is treated as the 0-255 range.
+- **pad_noise** (default: `0.0`): Gaussian jitter (std) added to the padded area to break up perfectly flat regions. 0.02-0.05 is recommended with solid colors.
+
+**Why this exists:** Qwen models were trained with black pads, so black padding tends to get amplified into large black edges during generation. White is therefore the default for Qwen. If a solid color is still not enough, `border_mean` or `mirror` are content-adaptive alternatives, and any mode benefits from a small `pad_noise`.
+
+The mask/semantics of the padded area are unchanged (it is always masked out), and `CropWithPadInfo_EditUtils` still crops the padding away correctly.
+
+
 ## Node Categories
 Documentation:
 
@@ -47,6 +65,7 @@ Documentation:
 
 - **Multi-Model Support**: Works with both Qwen and Flux2Klein models for versatile image editing
 - **Flexible Configuration**: Per-image configuration options for reference and VL processing
+- **Pad Edge Control**: Configurable pad mode/color/noise (white edge default for Qwen) to avoid black edge amplification
 - **Unified Interface**: Single node EditTextEncode_EditUtils works with multiple models through configuration nodes
 - **Advanced Processing**: Supports complex image editing workflows with multiple reference images
 - **Comprehensive Output**: Detailed output dictionary with all processing intermediates

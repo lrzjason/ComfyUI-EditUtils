@@ -138,6 +138,9 @@ Helper node to create configuration objects for Qwen-based image editing.
 - **vl_target_size**: Target size for VL processing (default: 384)
 - **vl_crop**: Cropping method for VL processing (options: "center", "disabled", default: "center")
 - **vl_upscale**: Upscaling method for VL processing (options: "lanczos", "bicubic", "area", default: "lanczos")
+- **pad_mode**: How the padding area is filled when ref_crop == "pad" (options: "color", "edge", "mirror", "border_mean", default: "color")
+- **pad_color**: Pad color used when pad_mode == "color" (named color, hex "#RRGGBB", or "r,g,b", default: "white")
+- **pad_noise**: Gaussian jitter (std) added to the pad area to avoid perfectly flat regions, 0 disables (default: 0.0)
 - **mask**: Optional mask for the image to define region of interest for editing
 
 ##### Outputs
@@ -150,6 +153,12 @@ Helper node to create configuration objects for Qwen-based image editing.
 - Provides default values for all configuration parameters
 - Output config list can be connected directly to EditTextEncode_EditUtils
 
+##### Pad mode notes
+- Qwen models were trained with black pads, so black padding tends to get amplified into large black edges during generation; white is used as the default here.
+- A perfectly flat fill (any solid color) is the strongest trigger for edge amplification. If plain colors are not enough, prefer pad_mode "border_mean" or "mirror", and/or add pad_noise 0.02-0.05 to break up the flat region.
+- pad_mode options: "color" = solid pad_color fill; "edge" = replicate the outermost pixel row/column; "mirror" = reflect the content at the boundary; "border_mean" = fill each side with the mean of its nearest 8 pixels.
+- pad_mode / pad_color / pad_noise only affect the VAE reference path (ref_crop == "pad"); the noise mask (when provided) is always 0 in the padded area.
+
 #### Flux2KleinConfigPreparer_EditUtils
 Helper node to create configuration objects for Flux2Klein-based image editing.
 
@@ -161,6 +170,9 @@ Helper node to create configuration objects for Flux2Klein-based image editing.
 - **ref_longest_edge**: Target longest edge size for reference processing (default: 1024)
 - **ref_crop**: Cropping method for reference processing (options: "pad", "center", "disabled", default: "pad")
 - **ref_upscale**: Upscaling method for reference processing (options: "lanczos", "bicubic", "area", default: "lanczos")
+- **pad_mode**: How the padding area is filled when ref_crop == "pad" (options: "color", "edge", "mirror", "border_mean", default: "color")
+- **pad_color**: Pad color used when pad_mode == "color" (named color, hex "#RRGGBB", or "r,g,b", default: "black")
+- **pad_noise**: Gaussian jitter (std) added to the pad area to avoid perfectly flat regions, 0 disables (default: 0.0)
 - **mask**: Optional mask for the image to define region of interest for editing
 
 ##### Outputs
@@ -172,6 +184,7 @@ Helper node to create configuration objects for Flux2Klein-based image editing.
 - Excludes VL-specific parameters that are not applicable to Flux2Klein
 - Allows appending to existing configuration lists
 - Output config list can be connected directly to EditTextEncode_EditUtils
+- Black is the default pad color since it matches the Flux2Klein training data
 
 #### ConfigJsonParser_EditUtils
 Helper node to create configuration objects from JSON strings.

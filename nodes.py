@@ -193,6 +193,115 @@ def validate_vl_resize_indexs(vl_resize_indexs_str, valid_length):
 
     return indexes
 
+def parse_pad_color(pad_color):
+    """Parse a pad color into an (r, g, b) float tuple in [0, 1].
+
+    Accepts named colors ("black", "white", "gray", "grey", "mid_gray", "mid_grey"),
+    hex strings ("#RRGGBB") or a list/tuple of 3 floats. If any value in the
+    list is > 1 it is treated as the 0-255 range, otherwise as [0, 1] floats.
+    Falls back to black (0, 0, 0) for anything unrecognized.
+    """
+    named_colors = {
+        "black": (0.0, 0.0, 0.0),
+        "white": (1.0, 1.0, 1.0),
+        "gray": (0.5, 0.5, 0.5),
+        "grey": (0.5, 0.5, 0.5),
+        "mid_gray": (0.5, 0.5, 0.5),
+        "mid_grey": (0.5, 0.5, 0.5),
+    }
+    fallback = named_colors["black"]
+
+    if isinstance(pad_color, (list, tuple)) and len(pad_color) == 3:
+        try:
+            values = [float(v) for v in pad_color]
+            if any(v > 1.0 for v in values):
+                # treat as 0-255 range
+                values = [v / 255.0 for v in values]
+            return tuple(min(max(v, 0.0), 1.0) for v in values)
+        except (TypeError, ValueError):
+            print(f"[EditUtils] Invalid pad_color '{pad_color}', fallback to black")
+            return fallback
+
+    if isinstance(pad_color, str):
+        name = pad_color.strip().lower()
+        if name in named_colors:
+            return named_colors[name]
+        # support "r,g,b" strings as well
+        if name.count(",") == 2:
+            try:
+                values = [float(v) for v in name.split(",")]
+                if any(v > 1.0 for v in values):
+                    values = [v / 255.0 for v in values]
+                return tuple(min(max(v, 0.0), 1.0) for v in values)
+            except ValueError:
+                pass
+        if name.startswith("#") and len(name) == 7:
+            try:
+                r = int(name[1:3], 16) / 255.0
+                g = int(name[3:5], 16) / 255.0
+                b = int(name[5:7], 16) / 255.0
+                return (r, g, b)
+            except ValueError:
+                pass
+    print(f"[EditUtils] Unknown pad_color '{pad_color}', fallback to black")
+    return fallback
+
+
+def build_pad_canvas(resized_samples, canvas_height, canvas_width,
+                     pad_mode="color", pad_color="black", pad_noise=0.0):
+    """Place resized_samples at the top-left of a canvas and fill the
+    remaining right/bottom padding.
+
+    pad_mode:
+        - "color": solid color fill (pad_color, e.g. "black", "white", "gray", "#RRGGBB")
+        - "edge": replicate the outermost pixel row/column
+        - "mirror": reflect the content at the boundary
+        - "border_mean": fill each side with the mean of its nearest pixels
+    pad_noise: gaussian jitter (std) added to the whole canvas to break up
+               perfectly flat regions; 0 disables it. 0.02-0.05 works well.
+    """
+    b, c, h, w = resized_samples.shape
+    pad_h = max(0, canvas_height - h)
+    pad_w = max(0, canvas_width - w)
+
+    if pad_mode == "edge":
+        canvas = F.pad(resized_samples, (0, pad_w, 0, pad_h), mode="replicate")
+    elif pad_mode == "mirror":
+        # reflect needs pad < dim; fall back to replicate otherwise
+        reflect_ok = (pad_w == 0 or pad_w < w) and (pad_h == 0 or pad_h < h)
+        mode = "reflect" if reflect_ok else "replicate"
+        canvas = F.pad(resized_samples, (0, pad_w, 0, pad_h), mode=mode)
+    elif pad_mode == "border_mean":
+        k = max(1, min(8, w, h))
+        # right side: mean of the nearest k columns
+        right_fill = resized_samples[:, :, :, w - k:].mean(dim=3, keepdim=True)
+        top_row = resized_samples if pad_w == 0 else torch.cat(
+            [resized_samples, right_fill.expand(b, c, h, pad_w)], dim=3)
+        # bottom side: mean of the nearest k rows, extended over the full canvas width
+        bottom_fill = resized_samples[:, :, h - k:, :w].mean(dim=2, keepdim=True)
+        corner_fill = resized_samples[:, :, h - k:, w - k:].mean(dim=(2, 3)).view(b, c, 1, 1)
+        bottom_row = bottom_fill.expand(b, c, 1, w) if pad_w == 0 else torch.cat(
+            [bottom_fill.expand(b, c, 1, w), corner_fill.expand(b, c, 1, pad_w)], dim=3)
+        canvas = top_row if pad_h == 0 else torch.cat(
+            [top_row, bottom_row.expand(b, c, max(pad_h, 1), canvas_width)], dim=2)
+    else:
+        # solid color fill
+        color = parse_pad_color(pad_color)
+        canvas = torch.zeros(
+            (b, c, canvas_height, canvas_width),
+            dtype=resized_samples.dtype,
+            device=resized_samples.device
+        )
+        for i in range(min(c, 3)):
+            canvas[:, i] = color[i]
+        canvas[:, :, :h, :w] = resized_samples
+
+    if pad_noise and float(pad_noise) > 0:
+        canvas = (canvas + torch.randn_like(canvas) * float(pad_noise)).clamp(0.0, 1.0)
+
+    return canvas
+
+
 class ModelConfig_EditUtils:
     @classmethod
     def INPUT_TYPES(s):
@@ -387,6 +496,12 @@ class EditTextEncode_EditUtils:
             ref_longest_edge = image_obj["ref_longest_edge"]
             ref_crop = image_obj["ref_crop"]
             ref_upscale = image_obj["ref_upscale"]
+            # pad appearance config, only used when ref_crop == "pad".
+            # default: white edge for qwen (black edge amplifies during generation),
+            # black edge otherwise (matches training data).
+            pad_mode = image_obj.get("pad_mode", "color")
+            pad_color = image_obj.get("pad_color", "white" if is_qwen else "black")
+            pad_noise = image_obj.get("pad_noise", 0.0)
             
             if is_qwen:
                 to_vl = image_obj["to_vl"]
@@ -438,20 +553,16 @@ class EditTextEncode_EditUtils:
                     # if scaled_height % vae_unit != 0:
                     #     height_ceil +=1
                     canvas_height = height_ceil * vae_unit
-                    # pad image to canvas size
-                    canvas = torch.zeros(
-                        (samples.shape[0], samples.shape[1], canvas_height, canvas_width),
-                        dtype=samples.dtype,
-                        device=samples.device
-                    )
                     
                     resized_samples = comfy.utils.common_upscale(samples, scaled_width, scaled_height, ref_upscale, crop)
                     
                     resized_width = resized_samples.shape[3]
                     resized_height = resized_samples.shape[2]
-                    # set resized samples to canvas
-                    # canvas[:, :, x_offset:resized_height, y_offset:resized_width] = resized_samples
-                    canvas[:, :, :resized_height, :resized_width] = resized_samples
+                    # pad image to canvas size with configurable pad mode/color
+                    canvas = build_pad_canvas(
+                        resized_samples, canvas_height, canvas_width,
+                        pad_mode=pad_mode, pad_color=pad_color, pad_noise=pad_noise
+                    )
                     
                     
                     # if set_noise_mask:
@@ -600,6 +711,9 @@ class ConfigJsonParser_EditUtils:
         "vl_target_size": 384,
         "vl_crop": "center",
         "vl_upscale": "bicubic",
+        "pad_mode": "color",
+        "pad_color": "black",
+        "pad_noise": 0.0,
         "mask": None
     }
     default_config_json = json.dumps(default_config)
@@ -662,6 +776,7 @@ class Flux2KleinConfigPreparer_EditUtils:
     upscale_methods = ["lanczos", "bicubic", "area"]
     crop_methods = ["pad", "center", "disabled"]
     vl_crop_methods = ["center", "disabled"]
+    pad_modes = ["color", "edge", "mirror", "border_mean"]
     
     # example_config = {
     #     "image": None,
@@ -694,6 +809,9 @@ class Flux2KleinConfigPreparer_EditUtils:
                 "ref_longest_edge": ("INT", {"default": 1024, "min": 16, "max": 4096, "step": 1, "tooltip": "Longest edge of the output latent"}),
                 "ref_crop": (s.crop_methods, {"default": "pad", "tooltip": "Crop method for reference image"}),
                 "ref_upscale": (s.upscale_methods, {"default": "lanczos", "tooltip": "Upscale method for reference image"}),
+                "pad_mode": (s.pad_modes, {"default": "color", "tooltip": "How to fill the padding area when ref_crop == pad. color = solid pad_color, edge = replicate edge pixels, mirror = reflect content, border_mean = fill with the mean of the nearest edge pixels"}),
+                "pad_color": ("STRING", {"default": "black", "tooltip": "Pad color when pad_mode == color: named color (black, white, gray, mid_gray), hex \"#RRGGBB\", or \"r,g,b\" floats in [0,1]. Black matches the training data for flux2klein"}),
+                "pad_noise": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 0.2, "step": 0.01, "tooltip": "Gaussian jitter (std) added to the pad area to avoid perfectly flat regions; 0.02-0.05 recommended with solid colors"}),
                 "mask": ("MASK", ),
             }
         }
@@ -705,6 +823,7 @@ class Flux2KleinConfigPreparer_EditUtils:
     CATEGORY = "advanced/conditioning"
     def prepare_config(self, image, configs=None,
                 to_ref=True, ref_main_image=True, ref_longest_edge=1024, ref_crop="center", ref_upscale="lanczos",
+                pad_mode="color", pad_color="black", pad_noise=0.0,
                 mask=None
         ):
         if configs is None:
@@ -719,6 +838,10 @@ class Flux2KleinConfigPreparer_EditUtils:
             "ref_longest_edge": ref_longest_edge,
             "ref_crop": ref_crop,
             "ref_upscale": ref_upscale,
+
+            "pad_mode": pad_mode,
+            "pad_color": pad_color,
+            "pad_noise": pad_noise,
         }
         
         
@@ -792,6 +915,7 @@ class QwenConfigPreparer_EditUtils:
     upscale_methods = ["lanczos", "bicubic", "area"]
     crop_methods = ["pad", "center", "disabled"]
     vl_crop_methods = ["center", "disabled"]
+    pad_modes = ["color", "edge", "mirror", "border_mean"]
     
     # example_config = {
     #     "image": None,
@@ -830,6 +954,9 @@ class QwenConfigPreparer_EditUtils:
                 "vl_target_size": ("INT", {"default": 384, "min": 384, "max": 2048, "tooltip": "Target size of the qwenvl 2.5 encode"}),
                 "vl_crop": (s.vl_crop_methods, {"default": "center", "tooltip": "Crop method for reference image"}),
                 "vl_upscale": (s.upscale_methods, {"default": "lanczos", "tooltip": "Upscale method for reference image"}),
+                "pad_mode": (s.pad_modes, {"default": "color", "tooltip": "How to fill the padding area when ref_crop == pad. color = solid pad_color, edge = replicate edge pixels, mirror = reflect content, border_mean = fill with the mean of the nearest edge pixels"}),
+                "pad_color": ("STRING", {"default": "white", "tooltip": "Pad color when pad_mode == color: named color (black, white, gray, mid_gray), hex \"#RRGGBB\", or \"r,g,b\" floats in [0,1]. Default white for qwen since black pads get amplified during generation"}),
+                "pad_noise": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 0.2, "step": 0.01, "tooltip": "Gaussian jitter (std) added to the pad area to avoid perfectly flat regions; 0.02-0.05 recommended with solid colors"}),
                 "mask": ("MASK", ),
             }
         }
@@ -842,6 +969,7 @@ class QwenConfigPreparer_EditUtils:
     def prepare_config(self, image, configs=None,
                 to_ref=True, ref_main_image=True, ref_longest_edge=1024, ref_crop="center", ref_upscale="lanczos",
                 to_vl=True, vl_resize=True, vl_target_size=384, vl_crop="center", vl_upscale="bicubic",
+                pad_mode="color", pad_color="white", pad_noise=0.0,
                 mask=None
         ):
         if configs is None:
@@ -861,7 +989,11 @@ class QwenConfigPreparer_EditUtils:
             "vl_resize": vl_resize,
             "vl_target_size": vl_target_size,
             "vl_crop": vl_crop,
-            "vl_upscale": vl_upscale
+            "vl_upscale": vl_upscale,
+
+            "pad_mode": pad_mode,
+            "pad_color": pad_color,
+            "pad_noise": pad_noise,
         }
         
         
@@ -1296,7 +1428,10 @@ class QwenEditTextEncode_EditUtils:
                 "vl_resize": True,  # Default to True
                 "vl_target_size": 384,  # Default to 384
                 "vl_crop": "center",  # Default to center
-                "vl_upscale": "lanczos"  # Default to lanczos
+                "vl_upscale": "lanczos",  # Default to lanczos
+                "pad_mode": "color",  # Default to color
+                "pad_color": "white",  # Default to white, black pads get amplified during qwen generation
+                "pad_noise": 0.0,  # Default to no noise
             }
             # Set mask to image1 if provided
             if mask is not None:
@@ -1315,7 +1450,10 @@ class QwenEditTextEncode_EditUtils:
                 "vl_resize": True,  # Default to True
                 "vl_target_size": 384,  # Default to 384
                 "vl_crop": "center",  # Default to center
-                "vl_upscale": "lanczos"  # Default to lanczos
+                "vl_upscale": "lanczos",  # Default to lanczos
+                "pad_mode": "color",  # Default to color
+                "pad_color": "white",  # Default to white, black pads get amplified during qwen generation
+                "pad_noise": 0.0,  # Default to no noise
             }
             configs.append(config2)
         
@@ -1331,7 +1469,10 @@ class QwenEditTextEncode_EditUtils:
                 "vl_resize": True,  # Default to True
                 "vl_target_size": 384,  # Default to 384
                 "vl_crop": "center",  # Default to center
-                "vl_upscale": "lanczos"  # Default to lanczos
+                "vl_upscale": "lanczos",  # Default to lanczos
+                "pad_mode": "color",  # Default to color
+                "pad_color": "white",  # Default to white, black pads get amplified during qwen generation
+                "pad_noise": 0.0,  # Default to no noise
             }
             configs.append(config3)
         
