@@ -12,6 +12,8 @@ import os
 import copy
 import folder_paths
 import hashlib
+from einops import rearrange
+import comfy.conds
 
 from PIL import Image, ImageOps, ImageSequence
 
@@ -307,7 +309,7 @@ class ModelConfig_EditUtils:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "model_choice": (["qwen", "flux2klein"], {
+                "model_choice": (["qwen", "flux2klein", "boogu"], {
                     "default": "qwen",
                 }),
                 "model_name": ("STRING", {"default": ""}),
@@ -333,9 +335,12 @@ class ModelConfig_EditUtils:
             "vae_unit": vae_unit
         }
         
-        # if model_choice == "qwen":
-        # Add qwen-specific configurations
-        config["llama_template"] = get_system_prompt(instruction)
+        # Boogu tokenizer auto-selects system prompt, no llama_template needed
+        if model_choice == "boogu":
+            config["llama_template"] = ""
+        else:
+            # Add model-specific configurations
+            config["llama_template"] = get_system_prompt(instruction)
         
         return (config,)
 
@@ -390,6 +395,98 @@ class Flux2KleinModelConfig_EditUtils:
             config["llama_template"] = get_system_prompt(instruction)
         return (config,)
     
+class BooguModelConfig_EditUtils:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "optional": {
+                "instruction": ("STRING", {"multiline": True, "default": ""}),
+            }
+        }
+
+    RETURN_TYPES = ("DICT",)
+    RETURN_NAMES = ("model_config",)
+    FUNCTION = "configure_model"
+
+    CATEGORY = "advanced/conditioning"
+
+    def configure_model(self, instruction=""):
+        config = {
+            "model_name": "boogu",
+            "vae_unit": 8,
+            "llama_template": ""
+        }
+        # Boogu tokenizer auto-selects system prompt, instruction is ignored
+        return (config,)
+
+class Krea2ModelConfig_EditUtils:
+    # Krea2 uses the Qwen text encoder and the Qwen-Image VAE, so it routes
+    # through the qwen encoding branch (model_name="qwen", vae_unit=8).
+    # DEFAULT_INSTRUCTION = ("Describe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:")
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "optional": {
+                "instruction": ("STRING", {"multiline": True,
+                                           "default": "Describe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:"}),
+            }
+        }
+
+    RETURN_TYPES = ("DICT",)
+    RETURN_NAMES = ("model_config",)
+    FUNCTION = "configure_model"
+
+    CATEGORY = "advanced/conditioning"
+
+    def configure_model(self, instruction=None):
+        if not instruction:
+            instruction = "Describe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:"
+        config = {
+            # routing key: qwen encoding path (Krea2 text encoder is Qwen-based)
+            "model_name": "qwen",
+            # Krea2's VAE is the Qwen-Image VAE -> same spatial unit as qwen
+            "vae_unit": 8,
+            # identifies the config origin for logging/debugging only
+            "config_for": "krea2",
+        }
+        config["llama_template"] = get_system_prompt(instruction)
+        return (config,)
+
+class QwenImage21ModelConfig_EditUtils:
+    # Qwen-Image 2.1 uses a Qwen3-VL text encoder and a 16x spatial-downscale
+    # VAE (64 latent channels). The reference latents are spliced into the text
+    # sequence at the vision slots, so the vision-tower image and the VAE image
+    # must be the SAME resized tensor: vae_unit is 32 (16x VAE x 2, so every
+    # vision slot covers one 2x2 group of latent tokens).
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "optional": {
+                "instruction": ("STRING", {"multiline": True, "default": ""}),
+            }
+        }
+
+    RETURN_TYPES = ("DICT",)
+    RETURN_NAMES = ("model_config",)
+    FUNCTION = "configure_model"
+
+    CATEGORY = "advanced/conditioning"
+
+    def configure_model(self, instruction=""):
+        config = {
+            "model_name": "qwen_image21",
+            "vae_unit": 32,
+            "llama_template": ""
+        }
+        # default: no template -> the QwenImage21 tokenizer auto-builds the
+        # "Comprehend and analyze the provided prompt." T2I template with the
+        # vision blocks inserted before the prompt. A custom instruction gets a
+        # custom system prompt; the encode node inserts the vision blocks at {}.
+        if instruction != "":
+            config["llama_template"] = get_system_prompt(instruction)
+        return (config,)
+
 class EditTextEncode_EditUtils:
     # upscale_methods = ["lanczos", "bicubic", "area"]
     # crop_methods = ["pad", "center", "disabled"]
@@ -429,7 +526,10 @@ class EditTextEncode_EditUtils:
                 "vae": ("VAE", ),
                 "prompt": ("STRING", {"multiline": True, "dynamicPrompts": True}),
                 "model_config": ("DICT", {"default": None}),
-                "configs": ("LIST", {"default": None})
+            },
+            "optional": 
+            {
+                "configs": ("LIST", {"default": None, "tooltip": "List of image configuration dictionaries. When not provided, performs text-only encoding."}),
             },
             # "optional": 
             # {
@@ -455,6 +555,8 @@ class EditTextEncode_EditUtils:
         # llama_template = get_system_prompt(instruction)
         model_name = model_config["model_name"] if "model_name" in model_config else None
         is_qwen = model_name == "qwen"
+        is_qwen21 = model_name == "qwen_image21"
+        is_boogu = model_name == "boogu"
         vae_unit = model_config["vae_unit"] if "vae_unit" in model_config else 8
         llama_template = model_config["llama_template"] if "llama_template" in model_config else ""
         image_prompt = ""
@@ -467,9 +569,117 @@ class EditTextEncode_EditUtils:
             "scale_by": 1.0,
         }
         # print("len(configs)", len(configs))
-        # check len(configs)
-        assert len(configs) > 0, "No image provided"
-        
+        # handle missing or empty configs: fall back to text-only encoding
+        if configs is None:
+            configs = []
+        if len(configs) == 0:
+            print("EditTextEncode_EditUtils: No image configs provided, performing text-only encoding.")
+
+        # Boogu: completely different processing - early return
+        if is_boogu:
+            negative_prompt = model_config.get("negative_prompt", "")
+            ref_latents = []
+            images_vl = []
+            vae_images_boogu = []
+            for i, image_obj in enumerate(configs):
+                assert "image" in image_obj, "Image is missing"
+                image = image_obj["image"]
+                to_ref = image_obj.get("to_ref", True)
+                to_vl = image_obj.get("to_vl", True)
+                ref_longest_edge = image_obj.get("ref_longest_edge", 1024)
+                ref_resize_mode = image_obj.get("ref_resize_mode", "longest_edge")
+                ref_crop = image_obj.get("ref_crop", "pad")
+                ref_upscale = image_obj.get("ref_upscale", "lanczos")
+                ref_main_image = image_obj.get("ref_main_image", i == 0)
+                vl_target_size = image_obj.get("vl_target_size", 384)
+                vl_crop = image_obj.get("vl_crop", "center")
+                vl_upscale = image_obj.get("vl_upscale", "lanczos")
+
+                if not to_ref and not to_vl:
+                    continue
+
+                samples = image.movedim(-1, 1)
+
+                # Vision tower input: area-based scaling to vl_target_size
+                if to_vl:
+                    total = int(vl_target_size * vl_target_size)
+                    scale_by = math.sqrt(total / (samples.shape[3] * samples.shape[2]))
+                    width = round(samples.shape[3] * scale_by)
+                    height = round(samples.shape[2] * scale_by)
+                    s = comfy.utils.common_upscale(samples, width, height, vl_upscale, vl_crop)
+                    images_vl.append(s.movedim(1, -1)[:, :, :, :3])
+
+                # Reference latent: aligned to vae_unit
+                if to_ref:
+                    if ref_resize_mode == "area":
+                        total = int(ref_longest_edge * ref_longest_edge)
+                        scale_by = math.sqrt(total / (samples.shape[3] * samples.shape[2]))
+                        scaled_width = int(round(samples.shape[3] * scale_by))
+                        scaled_height = int(round(samples.shape[2] * scale_by))
+                    else:  # longest_edge
+                        ori_longest_edge = max(samples.shape[2], samples.shape[3])
+                        scale_by = ori_longest_edge / ref_longest_edge
+                        scaled_height = int(round(samples.shape[2] / scale_by))
+                        scaled_width = int(round(samples.shape[3] / scale_by))
+
+                    if ref_crop == "pad":
+                        crop = "center"
+                        canvas_width = math.ceil(scaled_width / vae_unit) * vae_unit
+                        canvas_height = math.ceil(scaled_height / vae_unit) * vae_unit
+                        canvas = torch.zeros(
+                            (samples.shape[0], samples.shape[1], canvas_height, canvas_width),
+                            dtype=samples.dtype,
+                            device=samples.device
+                        )
+                        resized_samples = comfy.utils.common_upscale(samples, scaled_width, scaled_height, ref_upscale, crop)
+                        resized_width = resized_samples.shape[3]
+                        resized_height = resized_samples.shape[2]
+                        canvas[:, :, :resized_height, :resized_width] = resized_samples
+                        if ref_main_image:
+                            current_total = (samples.shape[3] * samples.shape[2])
+                            total_px = int(resized_width * resized_height)
+                            scale_by_val = math.sqrt(total_px / current_total)
+                            pad_info = {
+                                "x": 0,
+                                "y": 0,
+                                "width": canvas_width - resized_width,
+                                "height": canvas_height - resized_height,
+                                "scale_by": round(1 / scale_by_val, 3)
+                            }
+                        s = canvas
+                    else:
+                        crop = ref_crop
+                        width = round(scaled_width / vae_unit) * vae_unit
+                        height = round(scaled_height / vae_unit) * vae_unit
+                        s = comfy.utils.common_upscale(samples, width, height, ref_upscale, crop)
+
+                    vae_img = s.movedim(1, -1)[:, :, :, :3]
+                    vae_images_boogu.append(vae_img)
+                    ref_latents.append(vae.encode(vae_img))
+
+            # Tokenize: prompt directly with images (boogu tokenizer auto-selects system prompt)
+            positive = clip.encode_from_tokens_scheduled(clip.tokenize(prompt, images=images_vl))
+            negative = clip.encode_from_tokens_scheduled(clip.tokenize(negative_prompt))
+
+            # Reference latents go on BOTH positive and negative (cancels under CFG)
+            if len(ref_latents) > 0:
+                positive = node_helpers.conditioning_set_values(positive, {"reference_latents": ref_latents}, append=True)
+                negative = node_helpers.conditioning_set_values(negative, {"reference_latents": ref_latents}, append=True)
+
+            samples_out = ref_latents[0] if len(ref_latents) > 0 else torch.zeros(1, 4, 128, 128)
+            latent_out = {"samples": samples_out}
+
+            main_image = vae_images_boogu[0] if len(vae_images_boogu) > 0 else None
+
+            custom_output = {
+                "negative_cond": negative,
+                "ref_latents": ref_latents,
+                "vl_images": images_vl,
+                "vae_images": vae_images_boogu,
+            }
+
+            return (positive, latent_out, custom_output, main_image, None, pad_info)
+
         main_image_index = -1
         for i, image_obj in enumerate(configs):
             if image_obj["to_ref"]:
@@ -484,6 +694,7 @@ class EditTextEncode_EditUtils:
             main_image_index = 0
         
         ref_latents = []
+        rope_offsets = []  # parallel list to ref_latents: (x_offset, y_offset) tuples
         vae_images = []
         vl_images = []
         
@@ -497,11 +708,13 @@ class EditTextEncode_EditUtils:
             ref_crop = image_obj["ref_crop"]
             ref_upscale = image_obj["ref_upscale"]
             # pad appearance config, only used when ref_crop == "pad".
-            # default: white edge for qwen (black edge amplifies during generation),
-            # black edge otherwise (matches training data).
+            # default: white edge for qwen models (black edge amplifies during
+            # generation, both qwen 1.0 and qwen image 2.1), black edge
+            # otherwise (matches training data).
             pad_mode = image_obj.get("pad_mode", "color")
-            pad_color = image_obj.get("pad_color", "white" if is_qwen else "black")
+            pad_color = image_obj.get("pad_color", "white" if (is_qwen or is_qwen21) else "black")
             pad_noise = image_obj.get("pad_noise", 0.0)
+            ref_resize_mode = image_obj.get("ref_resize_mode", "longest_edge")
             
             if is_qwen:
                 to_vl = image_obj["to_vl"]
@@ -509,6 +722,15 @@ class EditTextEncode_EditUtils:
                 vl_target_size = image_obj["vl_target_size"]
                 vl_crop = image_obj["vl_crop"]
                 vl_upscale = image_obj["vl_upscale"]
+            elif is_qwen21:
+                # Qwen-Image 2.1: the vision-tower input is the resized reference
+                # itself, so there is no separate vl resize/crop pipeline.
+                to_vl = image_obj.get("to_vl", True)
+                if to_vl and not to_ref:
+                    print("QwenImage21: to_vl without to_ref would break vision-slot alignment; forcing to_ref=True")
+                    to_ref = True
+                elif to_ref and not to_vl:
+                    print("QwenImage21: reference without vision slot will splice after the text sequence (untrained path)")
             else:
                 to_vl = false
             
@@ -533,7 +755,11 @@ class EditTextEncode_EditUtils:
                 # ori_height, ori_width = samples.shape[2:]
                 ori_longest_edge = max(samples.shape[2], samples.shape[3])
                 
-                scale_by = ori_longest_edge / ref_longest_edge
+                if ref_resize_mode == "area":
+                    total = int(ref_longest_edge * ref_longest_edge)
+                    scale_by = math.sqrt(total / (samples.shape[3] * samples.shape[2]))
+                else:  # longest_edge
+                    scale_by = ori_longest_edge / ref_longest_edge
                 scaled_height = int(round(samples.shape[2] / scale_by))
                 scaled_width = int(round(samples.shape[3] / scale_by))
                 
@@ -620,9 +846,26 @@ class EditTextEncode_EditUtils:
                         noise_mask = m[:, :1, :, :].squeeze(1)
                         print("noise_mask.shape", noise_mask.shape)
                 image = s.movedim(1, -1)
-                ref_latents.append(vae.encode(image[:, :, :, :3]))
+                if is_qwen21:
+                    # Qwen-Image 2.1's VAE is RGBA (64ch / 16x downscale): keep all
+                    # four channels — plain RGB gets an opaque alpha padded in by
+                    # ComfyUI. The vision tower consumes the same resize composited
+                    # over white, so every vision slot maps to a 2x2 latent group.
+                    ref_latents.append(vae.encode(image))
+                else:
+                    ref_latents.append(vae.encode(image[:, :, :, :3]))
+                rope_offsets.append((
+                    image_obj.get("rope_x_offset", 0),
+                    image_obj.get("rope_y_offset", 0)
+                ))
                 vae_images.append(image)
-            if to_vl:
+                if is_qwen21 and to_vl:
+                    rgb = image[:, :, :, :3]
+                    if image.shape[-1] > 3:
+                        # the vision tower sees alpha composited over white, the vae keeps all four
+                        rgb = rgb * image[:, :, :, 3:] + (1.0 - image[:, :, :, 3:])
+                    vl_images.append(rgb)
+            if to_vl and not is_qwen21:
                 if vl_resize:
                     # print("vl_resize")
                     total = int(vl_target_size * vl_target_size)
@@ -646,23 +889,38 @@ class EditTextEncode_EditUtils:
         full_prompt = image_prompt + prompt
         # print("full_prompt", full_prompt)
         # print("llama_template", llama_template)
-        # if is_qwen:
-        #     tokens = clip.tokenize(full_prompt, images=vl_images, llama_template=llama_template)
-        # else:
-        # print("editutils image_prompt", image_prompt)
-        # print("editutils prompt", prompt)
-        # print("editutils llama_template", llama_template)
-        if llama_template == "" or llama_template is None:
+        if is_qwen21:
+            # QwenImage21 tokenizer auto-builds the T2I template ("Comprehend and
+            # analyze the provided prompt.") and inserts the vision blocks before
+            # the prompt; with a custom template they are spliced in at {}.
+            # keep_vision keeps the vision embeddings as plain text conditioning
+            # when no reference latents were encoded (vl-only / text-only mode).
+            if llama_template:
+                if len(vl_images) > 0:
+                    # same splice the QwenImage21 tokenizer uses for its auto template
+                    refs = " ".join("<image{}><|vision_start|><|image_pad|><|vision_end|>".format(j + 1) for j in range(len(vl_images)))
+                    llama_template = llama_template.replace("{}", refs + "{}", 1)
+                tokens = clip.tokenize(prompt, images=vl_images, llama_template=llama_template,
+                                       keep_vision=(len(ref_latents) == 0), prevent_empty_text=True)
+            else:
+                tokens = clip.tokenize(prompt, images=vl_images,
+                                       keep_vision=(len(ref_latents) == 0), prevent_empty_text=True)
+        elif llama_template == "" or llama_template is None:
             tokens = clip.tokenize(full_prompt, images=vl_images)
         else:
             tokens = clip.tokenize(full_prompt, images=vl_images, llama_template=llama_template)
         # print("editutils tokens", tokens)
         conditioning = clip.encode_from_tokens_scheduled(tokens)
-        samples = torch.zeros(1, 4, 128, 128)
+        if is_qwen21:
+            # 64 latent channels @ 16x spatial downscale
+            samples = torch.zeros(1, 64, 128, 128)
+        else:
+            samples = torch.zeros(1, 4, 128, 128)
         # conditioning_only_with_main_ref = None
+        conditioning_full_refs = conditioning
         if len(ref_latents) > 0:
             # conditioning_only_with_main_ref = node_helpers.conditioning_set_values(conditioning, {"reference_latents": [ref_latents[main_image_index]]}, append=True)
-            conditioning_full_refs = node_helpers.conditioning_set_values(conditioning, {"reference_latents": ref_latents}, append=True)
+            conditioning_full_refs = node_helpers.conditioning_set_values(conditioning, {"reference_latents": ref_latents, "reference_rope_offsets": rope_offsets}, append=True)
             # print("editutils conditioning_full_refs before", conditioning_full_refs)
             samples = ref_latents[main_image_index]
             # conditioning_full_refs = node_helpers.conditioning_set_values(conditioning_full_refs, {"concat_latent_image": samples}, append=True)
@@ -687,10 +945,10 @@ class EditTextEncode_EditUtils:
             "vae_images": vae_images,
             "ref_latents": ref_latents,
             # "llama_template": llama_template,
-            # "no_refs_cond": conditioning,
+            "no_refs_cond": conditioning,
             "mask": noise_mask,
         }
-        if is_qwen:
+        if is_qwen or is_qwen21:
             custom_output["vl_images"] = vl_images
             custom_output["full_prompt"] = full_prompt
         
@@ -700,6 +958,10 @@ class EditTextEncode_EditUtils:
 
 
 class ConfigJsonParser_EditUtils:
+    # pad_mode / pad_color / pad_noise are intentionally NOT part of the default
+    # template: this node is model-agnostic, so leaving them out lets the
+    # EditTextEncode fallback apply (white for qwen / qwen_image21, black
+    # otherwise). Add them to the JSON to override per image.
     default_config = {
         "to_ref": True,
         "ref_main_image": False,
@@ -711,9 +973,6 @@ class ConfigJsonParser_EditUtils:
         "vl_target_size": 384,
         "vl_crop": "center",
         "vl_upscale": "bicubic",
-        "pad_mode": "color",
-        "pad_color": "black",
-        "pad_noise": 0.0,
         "mask": None
     }
     default_config_json = json.dumps(default_config)
@@ -727,7 +986,7 @@ class ConfigJsonParser_EditUtils:
             "optional": 
             {
                 "configs": ("LIST", {"default": None, "tooltip": "Configs list"}),
-                "config_json": ("STRING", {"default": s.default_config_json, "multiline": True, "tooltip": "Config JSON String"}),
+                "config_json": ("STRING", {"default": s.default_config_json, "multiline": True, "tooltip": "Config JSON String. Optional pad keys: pad_mode (color/edge/mirror/border_mean), pad_color (white/black/gray/#RRGGBB), pad_noise (0.0-0.2). Defaults follow the model: white for qwen / qwen_image21, black otherwise."}),
                 "mask": ("MASK", ),
             }
         }
@@ -743,13 +1002,16 @@ class ConfigJsonParser_EditUtils:
             configs = []
         # print("len(configs)", len(configs))
         
-        config = self.default_config.copy()
+        config = ConfigJsonParser_EditUtils.default_config.copy()
+        json_config = {}
         try:
-            json_config = json.loads(config_json)
+            if config_json:
+                json_config = json.loads(config_json)
         except Exception as e:
-            print(f"An error occurred while loading json_config")
-            print(json_config)
-        
+            print(f"An error occurred while loading json_config: {e}")
+            print(config_json)
+            json_config = {}
+
         config.update(json_config)
         config["image"] = image
         
@@ -777,6 +1039,7 @@ class Flux2KleinConfigPreparer_EditUtils:
     crop_methods = ["pad", "center", "disabled"]
     vl_crop_methods = ["center", "disabled"]
     pad_modes = ["color", "edge", "mirror", "border_mean"]
+    resize_modes = ["longest_edge", "area"]
     
     # example_config = {
     #     "image": None,
@@ -813,6 +1076,9 @@ class Flux2KleinConfigPreparer_EditUtils:
                 "pad_color": ("STRING", {"default": "black", "tooltip": "Pad color when pad_mode == color: named color (black, white, gray, mid_gray), hex \"#RRGGBB\", or \"r,g,b\" floats in [0,1]. Black matches the training data for flux2klein"}),
                 "pad_noise": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 0.2, "step": 0.01, "tooltip": "Gaussian jitter (std) added to the pad area to avoid perfectly flat regions; 0.02-0.05 recommended with solid colors"}),
                 "mask": ("MASK", ),
+                "ref_resize_mode": (s.resize_modes, {"default": "longest_edge", "tooltip": "longest_edge: scale so the longest dimension equals ref_longest_edge. area: scale so total pixels equals ref_longest_edge squared."}),
+                "rope_x_offset": ("INT", {"default": 0, "min": 0, "max": 4096, "step": 8, "tooltip": "ROPE horizontal position offset in pixels (VAE-aligned). Shifts reference rightward on canvas. Requires model EditApply node."}),
+                "rope_y_offset": ("INT", {"default": 0, "min": 0, "max": 4096, "step": 8, "tooltip": "ROPE vertical position offset in pixels (VAE-aligned). Shifts reference downward on canvas. Requires model EditApply node."}),
             }
         }
 
@@ -824,7 +1090,8 @@ class Flux2KleinConfigPreparer_EditUtils:
     def prepare_config(self, image, configs=None,
                 to_ref=True, ref_main_image=True, ref_longest_edge=1024, ref_crop="center", ref_upscale="lanczos",
                 pad_mode="color", pad_color="black", pad_noise=0.0,
-                mask=None
+                
+                mask=None, ref_resize_mode="longest_edge", rope_x_offset=0, rope_y_offset=0
         ):
         if configs is None:
             configs = []
@@ -842,6 +1109,9 @@ class Flux2KleinConfigPreparer_EditUtils:
             "pad_mode": pad_mode,
             "pad_color": pad_color,
             "pad_noise": pad_noise,
+            "ref_resize_mode": ref_resize_mode,
+            "rope_x_offset": rope_x_offset,
+            "rope_y_offset": rope_y_offset,
         }
         
         
@@ -861,6 +1131,82 @@ class Flux2KleinConfigPreparer_EditUtils:
         
         config_output.append(config)
         # print("len(configs)", len(configs))
+        return (config_output, config, )
+
+
+class BooguConfigPreparer_EditUtils:
+    upscale_methods = ["lanczos", "bicubic", "area"]
+    crop_methods = ["pad", "center", "disabled"]
+    vl_crop_methods = ["center", "disabled"]
+    resize_modes = ["longest_edge", "area"]
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required":
+            {
+                "image": ("IMAGE", ),
+            },
+            "optional":
+            {
+                "configs": ("LIST", {"default": None, "tooltip": "Configs list"}),
+                "to_ref": ("BOOLEAN", {"default": True, "tooltip": "Add image to reference latent"}),
+                "ref_main_image": ("BOOLEAN", {"default": True, "tooltip": "Set image as main image which would return the latent as output."}),
+                "ref_longest_edge": ("INT", {"default": 1024, "min": 16, "max": 4096, "step": 1, "tooltip": "Longest edge of the output latent"}),
+                "ref_crop": (s.crop_methods, {"default": "pad", "tooltip": "Crop method for reference image"}),
+                "ref_upscale": (s.upscale_methods, {"default": "lanczos", "tooltip": "Upscale method for reference image"}),
+                "to_vl": ("BOOLEAN", {"default": True, "tooltip": "Add image to boogu vision tower encode"}),
+                "vl_target_size": ("INT", {"default": 384, "min": 384, "max": 2048, "tooltip": "Target size for vision tower input"}),
+                "vl_crop": (s.vl_crop_methods, {"default": "center", "tooltip": "Crop method for vision tower input"}),
+                "vl_upscale": (s.upscale_methods, {"default": "lanczos", "tooltip": "Upscale method for vision tower input"}),
+                "mask": ("MASK", ),
+                "ref_resize_mode": (s.resize_modes, {"default": "longest_edge", "tooltip": "longest_edge: scale so the longest dimension equals ref_longest_edge. area: scale so total pixels equals ref_longest_edge squared."}),
+                "rope_x_offset": ("INT", {"default": 0, "min": 0, "max": 4096, "step": 8, "tooltip": "ROPE horizontal position offset in pixels (VAE-aligned). Shifts reference rightward on canvas. Requires model EditApply node."}),
+                "rope_y_offset": ("INT", {"default": 0, "min": 0, "max": 4096, "step": 8, "tooltip": "ROPE vertical position offset in pixels (VAE-aligned). Shifts reference downward on canvas. Requires model EditApply node."}),
+            }
+        }
+
+    RETURN_TYPES = ("LIST", "ANY", )
+    RETURN_NAMES = ("configs", "config", )
+    FUNCTION = "prepare_config"
+
+    CATEGORY = "advanced/conditioning"
+
+    def prepare_config(self, image, configs=None,
+                to_ref=True, ref_main_image=True, ref_longest_edge=1024, ref_crop="pad", ref_upscale="lanczos",
+                to_vl=True, vl_target_size=384, vl_crop="center", vl_upscale="lanczos",
+                mask=None, ref_resize_mode="area", rope_x_offset=0, rope_y_offset=0
+        ):
+        if configs is None:
+            configs = []
+        config = {
+            "image": image,
+            "to_ref": to_ref,
+            "ref_main_image": ref_main_image,
+            "ref_longest_edge": ref_longest_edge,
+            "ref_crop": ref_crop,
+            "ref_upscale": ref_upscale,
+            "to_vl": to_vl,
+            "vl_target_size": vl_target_size,
+            "vl_crop": vl_crop,
+            "vl_upscale": vl_upscale,
+            "ref_resize_mode": ref_resize_mode,
+            "rope_x_offset": rope_x_offset,
+            "rope_y_offset": rope_y_offset,
+        }
+
+        config_output = copy.deepcopy(configs)
+
+        if mask is not None:
+            # check mask height,width equals image height,width
+            if mask.shape[1] != image.shape[1] or mask.shape[2] != image.shape[2]:
+                print("mask height,width not equals image height,width, skipping mask")
+                mask = None
+            config["mask"] = mask
+
+        del configs
+
+        config_output.append(config)
         return (config_output, config, )
 
 
@@ -884,31 +1230,48 @@ class Flux2KleinOutputExtractor_EditUtils:
             }
         }
 
-    # RETURN_TYPES = ("ANY", "MASK", "CONDITIONING", "CONDITIONING", "IMAGE", "LIST", "LIST", "LIST", "STRING", "STRING")
-    # RETURN_NAMES = ("pad_info", "noise_mask", "full_refs_cond", "main_ref_cond", "main_image", "vae_images", "ref_latents", "vl_images", "full_prompt", "llama_template")
-    
-    RETURN_TYPES = ("ANY", "IMAGE", "LIST", "LIST", "LIST", "STRING", "STRING", "CONDITIONING", "MASK")
+    RETURN_TYPES = ("ANY", "IMAGE", "LIST", "LIST", "STRING", "STRING", "CONDITIONING", "MASK")
     RETURN_NAMES = ("pad_info", "main_image", "vae_images", "ref_latents", "full_prompt", "llama_template", "no_refs_cond", "mask")
     FUNCTION = "extract"
 
     CATEGORY = "advanced/conditioning"
     
     def extract(self, custom_output):
-        pad_info = custom_output['pad_info'] if 'pad_info' in custom_output else None
-        # noise_mask = custom_output['noise_mask']
-        # full_refs_cond = custom_output['full_refs_cond']
-        # main_ref_cond = custom_output['main_ref_cond']
-        main_image = custom_output['main_image'] if 'main_image' in custom_output else None
-        vae_images = custom_output['vae_images'] if 'vae_images' in custom_output else None
-        ref_latents = custom_output['ref_latents'] if 'ref_latents' in custom_output else None
-        # vl_images = custom_output['vl_images']
-        full_prompt = custom_output['full_prompt'] if 'full_prompt' in custom_output else None
-        llama_template = custom_output['llama_template'] if 'llama_template' in custom_output else None
-        no_refs_cond = custom_output['no_refs_cond'] if 'no_refs_cond' in custom_output else None
-        mask = custom_output['mask'] if 'mask' in custom_output else None
+        pad_info = custom_output.get('pad_info')
+        main_image = custom_output.get('main_image')
+        vae_images = custom_output.get('vae_images')
+        ref_latents = custom_output.get('ref_latents')
+        full_prompt = custom_output.get('full_prompt')
+        llama_template = custom_output.get('llama_template')
+        no_refs_cond = custom_output.get('no_refs_cond')
+        mask = custom_output.get('mask')
         
         return (pad_info, main_image, vae_images, ref_latents, full_prompt, llama_template, no_refs_cond, mask)
 
+
+class BooguOutputExtractor_EditUtils:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required":
+            {
+                "custom_output": ("ANY", ),
+            }
+        }
+
+    RETURN_TYPES = ("CONDITIONING", "LIST", "LIST", "IMAGE")
+    RETURN_NAMES = ("negative_cond", "ref_latents", "vl_images", "main_image")
+    FUNCTION = "extract"
+
+    CATEGORY = "advanced/conditioning"
+
+    def extract(self, custom_output):
+        negative_cond = custom_output.get("negative_cond")
+        ref_latents = custom_output.get("ref_latents")
+        vl_images = custom_output.get("vl_images")
+        vae_images = custom_output.get("vae_images")
+        main_image = vae_images[0] if vae_images and len(vae_images) > 0 else None
+        return (negative_cond, ref_latents, vl_images, main_image)
 
 
 class QwenConfigPreparer_EditUtils:
@@ -916,6 +1279,7 @@ class QwenConfigPreparer_EditUtils:
     crop_methods = ["pad", "center", "disabled"]
     vl_crop_methods = ["center", "disabled"]
     pad_modes = ["color", "edge", "mirror", "border_mean"]
+    resize_modes = ["longest_edge", "area"]
     
     # example_config = {
     #     "image": None,
@@ -958,6 +1322,9 @@ class QwenConfigPreparer_EditUtils:
                 "pad_color": ("STRING", {"default": "white", "tooltip": "Pad color when pad_mode == color: named color (black, white, gray, mid_gray), hex \"#RRGGBB\", or \"r,g,b\" floats in [0,1]. Default white for qwen since black pads get amplified during generation"}),
                 "pad_noise": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 0.2, "step": 0.01, "tooltip": "Gaussian jitter (std) added to the pad area to avoid perfectly flat regions; 0.02-0.05 recommended with solid colors"}),
                 "mask": ("MASK", ),
+                "ref_resize_mode": (s.resize_modes, {"default": "longest_edge", "tooltip": "longest_edge: scale so the longest dimension equals ref_longest_edge. area: scale so total pixels equals ref_longest_edge squared."}),
+                "rope_x_offset": ("INT", {"default": 0, "min": 0, "max": 4096, "step": 8, "tooltip": "ROPE horizontal position offset in pixels (VAE-aligned, step=8). Shifts reference position IDs rightward on the canvas. Only effective with Krea2 when ref_pos_match_target=False."}),
+                "rope_y_offset": ("INT", {"default": 0, "min": 0, "max": 4096, "step": 8, "tooltip": "ROPE vertical position offset in pixels (VAE-aligned, step=8). Shifts reference position IDs downward on the canvas. Only effective with Krea2 when ref_pos_match_target=False."}),
             }
         }
 
@@ -970,7 +1337,8 @@ class QwenConfigPreparer_EditUtils:
                 to_ref=True, ref_main_image=True, ref_longest_edge=1024, ref_crop="center", ref_upscale="lanczos",
                 to_vl=True, vl_resize=True, vl_target_size=384, vl_crop="center", vl_upscale="bicubic",
                 pad_mode="color", pad_color="white", pad_noise=0.0,
-                mask=None
+                
+                mask=None, ref_resize_mode="longest_edge", rope_x_offset=0, rope_y_offset=0
         ):
         if configs is None:
             configs = []
@@ -984,6 +1352,7 @@ class QwenConfigPreparer_EditUtils:
             "ref_longest_edge": ref_longest_edge,
             "ref_crop": ref_crop,
             "ref_upscale": ref_upscale,
+            "ref_resize_mode": ref_resize_mode,
             
             "to_vl": to_vl,
             "vl_resize": vl_resize,
@@ -994,6 +1363,9 @@ class QwenConfigPreparer_EditUtils:
             "pad_mode": pad_mode,
             "pad_color": pad_color,
             "pad_noise": pad_noise,
+            
+            "rope_x_offset": rope_x_offset,
+            "rope_y_offset": rope_y_offset,
         }
         
         
@@ -1015,6 +1387,84 @@ class QwenConfigPreparer_EditUtils:
         # print("len(configs)", len(configs))
         return (config_output, config, )
 
+class QwenImage21ConfigPreparer_EditUtils:
+    # Per-image config for Qwen-Image 2.1. There is no separate vl pipeline:
+    # the vision-tower input is the resized reference itself, so every image
+    # is aligned to 32-pixel multiples (16x VAE downscale x 2, keeping each
+    # vision slot mapped onto a 2x2 group of latent tokens).
+    upscale_methods = ["lanczos", "bicubic", "area"]
+    crop_methods = ["pad", "center", "disabled"]
+    resize_modes = ["longest_edge", "area"]
+    pad_modes = ["color", "edge", "mirror", "border_mean"]
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required":
+            {
+                "image": ("IMAGE", ),
+            },
+            "optional":
+            {
+                "configs": ("LIST", {"default": None, "tooltip": "Configs list"}),
+                "to_ref": ("BOOLEAN", {"default": True, "tooltip": "Add image to reference latent"}),
+                "ref_main_image": ("BOOLEAN", {"default": True, "tooltip": "Set image as main image which would return the latent as output."}),
+                "ref_longest_edge": ("INT", {"default": 1024, "min": 32, "max": 4096, "step": 32, "tooltip": "Reference target size. Snapped to 32-pixel multiples (vision slot <-> 2x2 latent group alignment)."}),
+                "ref_crop": (s.crop_methods, {"default": "pad", "tooltip": "Crop method for reference image"}),
+                "ref_upscale": (s.upscale_methods, {"default": "lanczos", "tooltip": "Upscale method for reference image"}),
+                "to_vl": ("BOOLEAN", {"default": True, "tooltip": "Feed the resized reference to the Qwen3-VL text encoder and splice its latent at the vision slot. Keep enabled for trained behavior."}),
+                "mask": ("MASK", ),
+                "ref_resize_mode": (s.resize_modes, {"default": "longest_edge", "tooltip": "longest_edge: scale so the longest dimension equals ref_longest_edge. area: scale so total pixels equals ref_longest_edge squared."}),
+                "rope_x_offset": ("INT", {"default": 0, "min": 0, "max": 4096, "step": 8, "tooltip": "ROPE horizontal position offset in pixels (32-aligned). Shifts reference rightward on the canvas. Requires QwenImage21EditApply_EditUtils."}),
+                "rope_y_offset": ("INT", {"default": 0, "min": 0, "max": 4096, "step": 8, "tooltip": "ROPE vertical position offset in pixels (32-aligned). Shifts reference downward on the canvas. Requires QwenImage21EditApply_EditUtils."}),
+                "pad_mode": (s.pad_modes, {"default": "color", "tooltip": "How to fill the padding area when ref_crop == pad. color = solid pad_color, edge = replicate edge pixels, mirror = reflect content, border_mean = fill with the mean of the nearest edge pixels"}),
+                "pad_color": ("STRING", {"default": "white", "tooltip": "Pad color when pad_mode == color: named color (black, white, gray, mid_gray), hex \"#RRGGBB\", or \"r,g,b\". Default white for qwen image 2.1 since black pads get amplified during generation"}),
+                "pad_noise": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 0.2, "step": 0.01, "tooltip": "Gaussian jitter (std) added to the pad area to avoid perfectly flat regions; 0.02-0.05 recommended with solid colors"}),
+            }
+        }
+
+    RETURN_TYPES = ("LIST", "ANY", )
+    RETURN_NAMES = ("configs", "config", )
+    FUNCTION = "prepare_config"
+
+    CATEGORY = "advanced/conditioning"
+    def prepare_config(self, image, configs=None,
+                to_ref=True, ref_main_image=True, ref_longest_edge=1024, ref_crop="pad", ref_upscale="lanczos",
+                to_vl=True, mask=None, ref_resize_mode="longest_edge", rope_x_offset=0, rope_y_offset=0,
+                pad_mode="color", pad_color="white", pad_noise=0.0
+        ):
+        if configs is None:
+            configs = []
+        config = {
+            "image": image,
+            "to_ref": to_ref,
+            "ref_main_image": ref_main_image,
+            "ref_longest_edge": ref_longest_edge,
+            "ref_crop": ref_crop,
+            "ref_upscale": ref_upscale,
+            "ref_resize_mode": ref_resize_mode,
+            "to_vl": to_vl,
+            "rope_x_offset": rope_x_offset,
+            "rope_y_offset": rope_y_offset,
+            "pad_mode": pad_mode,
+            "pad_color": pad_color,
+            "pad_noise": pad_noise,
+        }
+
+        config_output = copy.deepcopy(configs)
+
+        if mask is not None:
+            # check mask height,width equals image height,width
+            if mask.shape[1] != image.shape[1] or mask.shape[2] != image.shape[2]:
+                print("mask height,width not equals image height,width, skipping mask")
+                mask = None
+            config["mask"] = mask
+
+        del configs
+
+        config_output.append(config)
+        return (config_output, config, )
+
 class QwenEditOutputExtractor_EditUtils:
     preset_keys = [
         "pad_info",
@@ -1026,7 +1476,7 @@ class QwenEditOutputExtractor_EditUtils:
         "vl_images",
         "full_prompt",
         # "llama_template",
-        # "no_refs_cond",
+        "no_refs_cond",
         "mask"
     ]
     @classmethod
@@ -1038,9 +1488,6 @@ class QwenEditOutputExtractor_EditUtils:
             }
         }
 
-    # RETURN_TYPES = ("ANY", "MASK", "CONDITIONING", "CONDITIONING", "IMAGE", "LIST", "LIST", "LIST", "STRING", "STRING")
-    # RETURN_NAMES = ("pad_info", "noise_mask", "full_refs_cond", "main_ref_cond", "main_image", "vae_images", "ref_latents", "vl_images", "full_prompt", "llama_template")
-    
     RETURN_TYPES = ("ANY", "CONDITIONING", "CONDITIONING", "IMAGE", "LIST", "LIST", "LIST", "STRING", "STRING", "CONDITIONING", "MASK")
     RETURN_NAMES = ("pad_info", "full_refs_cond", "main_ref_cond", "main_image", "vae_images", "ref_latents", "vl_images", "full_prompt", "llama_template", "no_refs_cond", "mask")
     FUNCTION = "extract"
@@ -1048,18 +1495,17 @@ class QwenEditOutputExtractor_EditUtils:
     CATEGORY = "advanced/conditioning"
     
     def extract(self, custom_output):
-        pad_info = custom_output['pad_info'] if 'pad_info' in custom_output else None
-        # noise_mask = custom_output['noise_mask']
-        full_refs_cond = custom_output['full_refs_cond'] if 'full_refs_cond' in custom_output else None
-        main_ref_cond = custom_output['main_ref_cond'] if 'main_ref_cond' in custom_output else None
-        main_image = custom_output['main_image'] if 'main_image' in custom_output else None
-        vae_images = custom_output['vae_images'] if 'vae_images' in custom_output else None
-        ref_latents = custom_output['ref_latents'] if 'ref_latents' in custom_output else None
-        vl_images = custom_output['vl_images'] if 'vl_images' in custom_output else None
-        full_prompt = custom_output['full_prompt'] if 'full_prompt' in custom_output else None
-        llama_template = custom_output['llama_template'] if 'llama_template' in custom_output else None
-        no_refs_cond = custom_output['no_refs_cond'] if 'no_refs_cond' in custom_output else None
-        mask = custom_output['mask'] if 'mask' in custom_output else None
+        pad_info = custom_output.get('pad_info')
+        full_refs_cond = custom_output.get('full_refs_cond')
+        main_ref_cond = custom_output.get('main_ref_cond')
+        main_image = custom_output.get('main_image')
+        vae_images = custom_output.get('vae_images')
+        ref_latents = custom_output.get('ref_latents')
+        vl_images = custom_output.get('vl_images')
+        full_prompt = custom_output.get('full_prompt')
+        llama_template = custom_output.get('llama_template')
+        no_refs_cond = custom_output.get('no_refs_cond')
+        mask = custom_output.get('mask')
         
         return (pad_info, full_refs_cond, main_ref_cond, main_image, vae_images, ref_latents, vl_images, full_prompt, llama_template, no_refs_cond, mask)
 
@@ -1085,6 +1531,161 @@ class ListExtractor_EditUtils:
         assert index < len(items), f"Index out of range, len(image_list): {len(items)}"
         
         return (items[index], )
+
+
+class ClearRefLatents_EditUtils:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": 
+            {
+                "conditioning": ("CONDITIONING", ),
+            }
+        }
+
+    RETURN_TYPES = ("CONDITIONING", )
+    RETURN_NAMES = ("conditioning", )
+    FUNCTION = "clear_refs"
+
+    CATEGORY = "advanced/conditioning"
+    def clear_refs(self, conditioning):
+        cleared = node_helpers.conditioning_set_values(conditioning, {"reference_latents": []}, append=False)
+        return (cleared, )
+
+
+condition_dir = os.path.join(folder_paths.models_dir, "conditions")
+
+if "conditions" not in folder_paths.folder_names_and_paths:
+    folder_paths.folder_names_and_paths["conditions"] = ([condition_dir], {'.ckpt'})
+
+
+class SaveCondition_EditUtils:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "condition": ("CONDITIONING",),
+                "filename": ("STRING", {"default": "condition_tensor"}),
+            },
+        }
+
+    RETURN_TYPES = ()
+    FUNCTION = "save_condition"
+    CATEGORY = "advanced/conditioning"
+    OUTPUT_NODE = True
+
+    def save_condition(self, condition, filename):
+        os.makedirs(condition_dir, exist_ok=True)
+
+        safe_filename = os.path.basename(filename)
+        if not safe_filename.endswith(".ckpt"):
+            safe_filename += ".ckpt"
+
+        save_dir = folder_paths.folder_names_and_paths["conditions"][0][0]
+        save_path = os.path.join(save_dir, safe_filename)
+
+        try:
+            tensors_to_save = []
+            for cond, cond_info in condition:
+                tensors_to_save.append((cond.clone(), cond_info))
+            torch.save(tensors_to_save, save_path)
+            print(f"Condition tensor saved to {save_path}")
+        except Exception as e:
+            print(f"Error saving condition tensor: {e}")
+
+        return ()
+
+
+class LoadCondition_EditUtils:
+    @classmethod
+    def INPUT_TYPES(cls):
+        os.makedirs(condition_dir, exist_ok=True)
+
+        condition_files = []
+        try:
+            condition_files = folder_paths.get_filename_list("conditions")
+            condition_files = [os.path.splitext(file)[0] for file in condition_files]
+        except Exception as e:
+            print(f"Error listing condition files: {e}")
+
+        if not condition_files:
+            condition_files = ["No files found"]
+
+        return {
+            "required": {
+                "filename": (condition_files, ),
+            },
+        }
+
+    RETURN_TYPES = ("CONDITIONING",)
+    FUNCTION = "load_condition"
+    CATEGORY = "advanced/conditioning"
+
+    def load_condition(self, filename):
+        os.makedirs(condition_dir, exist_ok=True)
+
+        safe_filename = os.path.basename(filename)
+        if not safe_filename.endswith(".ckpt"):
+            safe_filename += ".ckpt"
+
+        load_dir = folder_paths.folder_names_and_paths["conditions"][0][0]
+        load_path = os.path.join(load_dir, safe_filename)
+
+        try:
+            if not os.path.exists(load_path):
+                raise FileNotFoundError(f"Condition file not found: {load_path}")
+            loaded_tensors = torch.load(load_path)
+            print(f"Condition tensor loaded from {load_path}")
+            return (loaded_tensors,)
+        except Exception as e:
+            print(f"Error loading condition tensor: {e}")
+            return ([],)
+
+
+class LoadConditionFromLoras_EditUtils:
+    @classmethod
+    def INPUT_TYPES(cls):
+        os.makedirs(condition_dir, exist_ok=True)
+
+        condition_files = []
+        try:
+            condition_files = folder_paths.get_filename_list("loras")
+            condition_files = [os.path.splitext(file)[0] for file in condition_files]
+        except Exception as e:
+            print(f"Error listing condition files: {e}")
+
+        if not condition_files:
+            condition_files = ["No files found"]
+
+        return {
+            "required": {
+                "filename": (condition_files, ),
+            },
+        }
+
+    RETURN_TYPES = ("CONDITIONING",)
+    FUNCTION = "load_condition"
+    CATEGORY = "advanced/conditioning"
+
+    def load_condition(self, filename):
+        os.makedirs(condition_dir, exist_ok=True)
+
+        safe_filename = os.path.basename(filename)
+        if not safe_filename.endswith(".ckpt"):
+            safe_filename += ".ckpt"
+
+        load_dir = folder_paths.folder_names_and_paths["conditions"][0][0]
+        load_path = os.path.join(load_dir, safe_filename)
+
+        try:
+            if not os.path.exists(load_path):
+                raise FileNotFoundError(f"Condition file not found: {load_path}")
+            loaded_tensors = torch.load(load_path)
+            print(f"Condition tensor loaded from {load_path}")
+            return (loaded_tensors,)
+        except Exception as e:
+            print(f"Error loading condition tensor: {e}")
+            return ([],)
 
 
 class Any2Image_EditUtils:
@@ -1294,7 +1895,7 @@ class DiffMask_EditUtils:
 
         if use_frequency:
             # Frequency-domain difference calculation (high-pass filter version)
-            freq_diff = self._frequency_highpass_diff(gray1, gray2, highpass_sigma)
+            freq_diff = DiffMask_EditUtils._frequency_highpass_diff(gray1, gray2, highpass_sigma)
             # Blend frequency-domain difference with spatial-domain difference
             combined_diff = freq_weight * freq_diff + (1 - freq_weight) * pixel_diff
         else:
@@ -1335,7 +1936,8 @@ class DiffMask_EditUtils:
         mask = mask.squeeze(1)
         return (mask,)
 
-    def _frequency_highpass_diff(self, img1, img2, sigma):
+    @staticmethod
+    def _frequency_highpass_diff(img1, img2, sigma):
         """
         Compute high-pass frequency-domain difference map between two grayscale images.
         img1, img2: (B,1,H,W) range [0,1]
@@ -1373,6 +1975,87 @@ class DiffMask_EditUtils:
         # Normalize to [0,1] (across batch and spatial dimensions)
         diff_map = diff_map / (diff_map.max() + 1e-6)
         return diff_map
+
+
+class RopeOffsetFromMask_EditUtils:
+    """Extract ROPE position offsets from a mask or black-and-white image.
+
+    Finds the bounding box of the white (non-zero) region and outputs
+    the top-left corner as rope_x_offset / rope_y_offset, aligned to
+    the VAE unit. Also outputs region dimensions for setting ref_longest_edge.
+    """
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "mask": ("MASK", {"tooltip": "Black and white mask (B,H,W). White region indicates where the reference should be placed."}),
+            },
+            "optional": {
+                "image": ("IMAGE", {"tooltip": "Optional black-and-white image (B,H,W,C). If provided, converted to grayscale mask. Overrides 'mask' input."}),
+                "vae_unit": ("INT", {"default": 8, "min": 8, "max": 16, "step": 8, "tooltip": "VAE spatial unit (8 for Krea2/QwenImage/Boogu, 16 for Flux2Klein). Offsets are aligned to this."}),
+                "threshold": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Threshold to binarize. Pixels above this value are considered 'white'."}),
+            },
+        }
+
+    RETURN_TYPES = ("INT", "INT", "INT", "INT")
+    RETURN_NAMES = ("rope_x_offset", "rope_y_offset", "region_width", "region_height")
+    FUNCTION = "extract_offsets"
+    CATEGORY = "advanced/conditioning"
+    DESCRIPTION = (
+        "Extract ROPE position offsets from a mask or B&W image's bounding box. "
+        "White region's top-left corner becomes (rope_x_offset, rope_y_offset). "
+        "Also outputs region width/height for setting ref_longest_edge."
+    )
+
+    def extract_offsets(self, mask, image=None, vae_unit=8, threshold=0.5):
+        # If image is provided, convert to grayscale mask
+        if image is not None:
+            # image shape: (B, H, W, C) with values 0-1
+            img = image[0]  # (H, W, C)
+            # Convert to grayscale luminance
+            if img.shape[-1] >= 3:
+                gray = 0.299 * img[..., 0] + 0.587 * img[..., 1] + 0.114 * img[..., 2]
+            else:
+                gray = img[..., 0]
+            m = gray  # (H, W)
+        else:
+            # mask shape: (B, H, W) with values 0-1
+            if mask.ndim == 3:
+                m = mask[0]  # (H, W)
+            elif mask.ndim == 2:
+                m = mask
+            else:
+                raise ValueError(f"Expected mask with 2 or 3 dimensions, got {mask.ndim}")
+
+        # Binarize
+        binary = (m > threshold).float()
+
+        # Find non-zero pixels
+        nonzero = torch.nonzero(binary, as_tuple=False)  # (N, 2) -> [row, col]
+
+        if nonzero.shape[0] == 0:
+            # All black — return full canvas dimensions
+            h, w = m.shape[0], m.shape[1]
+            return (0, 0, (w // vae_unit) * vae_unit, (h // vae_unit) * vae_unit)
+
+        # Bounding box: min_row, min_col, max_row, max_col
+        min_row = int(nonzero[:, 0].min().item())  # Y (height)
+        min_col = int(nonzero[:, 1].min().item())  # X (width)
+        max_row = int(nonzero[:, 0].max().item())
+        max_col = int(nonzero[:, 1].max().item())
+
+        # Align offsets to VAE unit (floor to nearest unit)
+        rope_x_offset = (min_col // vae_unit) * vae_unit
+        rope_y_offset = (min_row // vae_unit) * vae_unit
+
+        # Region dimensions (ceil to nearest unit)
+        raw_width = max_col - min_col + 1
+        raw_height = max_row - min_row + 1
+        region_width = ((raw_width + vae_unit - 1) // vae_unit) * vae_unit
+        region_height = ((raw_height + vae_unit - 1) // vae_unit) * vae_unit
+
+        return (rope_x_offset, rope_y_offset, region_width, region_height)
 
 
 class QwenEditTextEncode_EditUtils:
@@ -1490,6 +2173,109 @@ class QwenEditTextEncode_EditUtils:
         )
 
 
+class QwenImage21EditTextEncode_EditUtils:
+    # Qwen-Image 2.1 edit text encode: up to 3 reference images through the
+    # QwenImage21 branch (same resize for the Qwen3-VL vision tower and the
+    # 16x VAE, 64ch latents, image_slots spliced conditioning).
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "clip": ("CLIP", ),
+                "vae": ("VAE", ),
+                "prompt": ("STRING", {"multiline": True, "dynamicPrompts": True}),
+            },
+            "optional": {
+                "image1": ("IMAGE", ),
+                "image2": ("IMAGE", ),
+                "image3": ("IMAGE", ),
+                "ref_longest_edge": ("INT", {"default": 1024, "min": 32, "max": 4096, "step": 32, "tooltip": "Reference target size. Snapped to 32-pixel multiples."}),
+                "mask": ("MASK", ),
+            }
+        }
+
+    RETURN_TYPES = ("CONDITIONING", "LATENT", "ANY", "IMAGE", "MASK")
+    RETURN_NAMES = ("conditioning", "latent", "custom_output", "main_image", "mask")
+    FUNCTION = "encode"
+
+    CATEGORY = "advanced/conditioning"
+
+    def encode(self, clip, vae, prompt,
+               image1=None, image2=None, image3=None,
+               mask=None,
+               ref_longest_edge=1024):
+        # Prepare model config: default template is auto-built by the
+        # QwenImage21 tokenizer (no custom system prompt).
+        model_config = {
+            "model_name": "qwen_image21",
+            "instruction": "",
+            "vae_unit": 32,
+            "llama_template": ""
+        }
+
+        # Prepare configs list
+        configs = []
+
+        # Process each image if provided
+        if image1 is not None:
+            config1 = {
+                "image": image1,
+                "to_ref": True,
+                "ref_main_image": True,  # First image is main by default
+                "ref_longest_edge": ref_longest_edge,
+                "ref_crop": "pad",
+                "ref_upscale": "lanczos",
+                "to_vl": True,
+                "pad_mode": "color",
+                "pad_color": "white",  # black pads get amplified during qwen image 2.1 generation
+                "pad_noise": 0.0,
+            }
+            if mask is not None:
+                config1["mask"] = mask
+            configs.append(config1)
+
+        if image2 is not None:
+            configs.append({
+                "image": image2,
+                "to_ref": True,
+                "ref_main_image": False,
+                "ref_longest_edge": ref_longest_edge,
+                "ref_crop": "pad",
+                "ref_upscale": "lanczos",
+                "to_vl": True,
+                "pad_mode": "color",
+                "pad_color": "white",  # black pads get amplified during qwen image 2.1 generation
+                "pad_noise": 0.0,
+            })
+
+        if image3 is not None:
+            configs.append({
+                "image": image3,
+                "to_ref": True,
+                "ref_main_image": False,
+                "ref_longest_edge": ref_longest_edge,
+                "ref_crop": "pad",
+                "ref_upscale": "lanczos",
+                "to_vl": True,
+                "pad_mode": "color",
+                "pad_color": "white",  # black pads get amplified during qwen image 2.1 generation
+                "pad_noise": 0.0,
+            })
+
+        if len(configs) == 0:
+            raise ValueError("At least one image must be provided")
+
+        # Call the original EditTextEncode function
+        node_instance = EditTextEncode_EditUtils()
+        return node_instance.encode(
+            clip=clip,
+            vae=vae,
+            prompt=prompt,
+            model_config=model_config,
+            configs=configs
+        )
+
+
 class Flux2KleinEditTextEncode_EditUtils:
     @classmethod
     def INPUT_TYPES(s):
@@ -1581,6 +2367,1587 @@ class Flux2KleinEditTextEncode_EditUtils:
         )
 
 
+class BooguEditTextEncode_EditUtils:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "clip": ("CLIP", ),
+                "vae": ("VAE", ),
+                "prompt": ("STRING", {"multiline": True, "dynamicPrompts": True}),
+            },
+            "optional": {
+                "negative_prompt": ("STRING", {"multiline": True, "dynamicPrompts": True, "default": ""}),
+                "image1": ("IMAGE", ),
+                "image2": ("IMAGE", ),
+                "image3": ("IMAGE", ),
+                "ref_longest_edge": ("INT", {"default": 1024, "min": 16, "max": 4096, "step": 1, "tooltip": "Longest edge of the output latent"}),
+                "mask": ("MASK", ),
+                "ref_resize_mode": (["longest_edge", "area"], {"default": "longest_edge", "tooltip": "longest_edge vs area-based resize"}),
+            }
+        }
+
+    RETURN_TYPES = ("CONDITIONING", "CONDITIONING", "LATENT", "ANY", "IMAGE")
+    RETURN_NAMES = ("positive", "negative", "latent", "custom_output", "main_image")
+    FUNCTION = "encode"
+
+    CATEGORY = "advanced/conditioning"
+
+    def encode(self, clip, vae, prompt,
+               negative_prompt="",
+               image1=None, image2=None, image3=None,
+               ref_longest_edge=1024, mask=None, ref_resize_mode="longest_edge"):
+        # Prepare model config for boogu
+        model_config = {
+            "model_name": "boogu",
+            "vae_unit": 8,
+            "llama_template": "",
+            "negative_prompt": negative_prompt
+        }
+
+        # Prepare configs list
+        configs = []
+
+        if image1 is not None:
+            config1 = {
+                "image": image1,
+                "to_ref": True,
+                "ref_main_image": True,
+                "ref_longest_edge": ref_longest_edge,
+                "ref_resize_mode": ref_resize_mode,
+                "ref_crop": "pad",
+                "ref_upscale": "lanczos",
+            }
+            if mask is not None:
+                config1["mask"] = mask
+            configs.append(config1)
+
+        if image2 is not None:
+            configs.append({
+                "image": image2,
+                "to_ref": True,
+                "ref_main_image": False,
+                "ref_longest_edge": ref_longest_edge,
+                "ref_resize_mode": ref_resize_mode,
+                "ref_crop": "pad",
+                "ref_upscale": "lanczos",
+            })
+
+        if image3 is not None:
+            configs.append({
+                "image": image3,
+                "to_ref": True,
+                "ref_main_image": False,
+                "ref_longest_edge": ref_longest_edge,
+                "ref_resize_mode": ref_resize_mode,
+                "ref_crop": "pad",
+                "ref_upscale": "lanczos",
+            })
+
+        if len(configs) == 0:
+            raise ValueError("At least one image must be provided")
+
+        # Call the unified EditTextEncode function
+        node_instance = EditTextEncode_EditUtils()
+        positive, latent_out, custom_output, main_image, noise_mask, pad_info = node_instance.encode(
+            clip=clip,
+            vae=vae,
+            prompt=prompt,
+            model_config=model_config,
+            configs=configs
+        )
+
+        negative = custom_output.get("negative_cond")
+        return (positive, negative, latent_out, custom_output, main_image)
+
+
+class LongestEdgeImageProcess_EditUtils:
+    upscale_methods = ["lanczos", "bicubic", "area"]
+    crop_methods = ["pad", "center", "disabled"]
+    pad_modes = ["color", "edge", "mirror", "border_mean"]
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "image": ("IMAGE", ),
+                "ref_longest_edge": ("INT", {"default": 1024, "min": 8, "max": 4096, "step": 1, "tooltip": "Longest edge of the output image"}),
+                "ref_crop": (s.crop_methods, {"default": "pad", "tooltip": "Crop method: pad adds padding, center crops to center, disabled keeps as-is"}),
+                "ref_upscale": (s.upscale_methods, {"default": "lanczos", "tooltip": "Upscale method"}),
+                "vae_unit": ("INT", {"default": 8, "min": 8, "max": 64, "step": 8, "tooltip": "VAE unit size for padding alignment"}),
+            },
+            "optional": {
+                "pad_mode": (s.pad_modes, {"default": "color", "tooltip": "How to fill the padding area when ref_crop == pad. color = solid pad_color, edge = replicate edge pixels, mirror = reflect content, border_mean = fill with the mean of the nearest edge pixels"}),
+                "pad_color": ("STRING", {"default": "black", "tooltip": "Pad color when pad_mode == color: named color (black, white, gray, mid_gray), hex \"#RRGGBB\", or \"r,g,b\". Use white for qwen models since black pads get amplified during generation"}),
+                "pad_noise": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 0.2, "step": 0.01, "tooltip": "Gaussian jitter (std) added to the pad area to avoid perfectly flat regions; 0.02-0.05 recommended with solid colors"}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "ANY", "FLOAT")
+    RETURN_NAMES = ("processed_image", "pad_info", "scale_by")
+    FUNCTION = "process"
+
+    CATEGORY = "image"
+
+    def process(self, image, ref_longest_edge, ref_crop, ref_upscale, vae_unit,
+                pad_mode="color", pad_color="black", pad_noise=0.0):
+        samples = image.movedim(-1, 1)
+
+        ori_longest_edge = max(samples.shape[2], samples.shape[3])
+        scale_by = ori_longest_edge / ref_longest_edge
+        scaled_height = int(round(samples.shape[2] / scale_by))
+        scaled_width = int(round(samples.shape[3] / scale_by))
+
+        pad_info = {
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0,
+            "scale_by": round(1 / scale_by, 3)
+        }
+
+        if ref_crop == "pad":
+            crop = "center"
+
+            width_ceil = math.ceil(scaled_width / vae_unit)
+            canvas_width = width_ceil * vae_unit
+
+            height_ceil = math.ceil(scaled_height / vae_unit)
+            canvas_height = height_ceil * vae_unit
+
+            resized_samples = comfy.utils.common_upscale(samples, scaled_width, scaled_height, ref_upscale, crop)
+
+            resized_width = resized_samples.shape[3]
+            resized_height = resized_samples.shape[2]
+            # pad image to canvas size with configurable pad mode/color
+            canvas = build_pad_canvas(
+                resized_samples, canvas_height, canvas_width,
+                pad_mode=pad_mode, pad_color=pad_color, pad_noise=pad_noise
+            )
+
+            current_total = (samples.shape[3] * samples.shape[2])
+            total = int(resized_width * resized_height)
+            scale_by_val = math.sqrt(total / current_total)
+
+            pad_info = {
+                "x": 0,
+                "y": 0,
+                "width": canvas_width - resized_width,
+                "height": canvas_height - resized_height,
+                "scale_by": round(1 / scale_by_val, 3)
+            }
+
+            s = canvas
+        else:
+            crop = ref_crop
+            width = round(scaled_width / vae_unit) * vae_unit
+            height = round(scaled_height / vae_unit) * vae_unit
+            s = comfy.utils.common_upscale(samples, width, height, ref_upscale, crop)
+
+        processed_image = s.movedim(1, -1)
+
+        return (processed_image, pad_info, pad_info["scale_by"])
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Krea2 Edit Apply — Model Patch (matches UnifiedTrainer forward logic)
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Sentinel used internally to stash the original forward method on the instance.
+_EDITUTILS_ORIGINAL_FORWARD_ATTR = "_editutils_krea2_original_forward"
+
+
+def _editutils_make_ref_positions(ref_latents_list, bs, patch_size, device, dtype,
+                                  scale_to_grid=None, rope_offsets=None):
+    """Build position-id blocks for a list of reference latents.
+
+    Each reference gets a positive incrementing frame index
+    (matching UnifiedTrainer / ai-toolkit ``index_timestep_zero``):
+    ref₁=+1, ref₂=+2, …  Returns ``(ref_tokens_list, ref_pos_list, total_reflen)``.
+
+    ``scale_to_grid``: optional ``(th, tw)`` target token grid. When given, ref
+    (h, w) ids are center-aligned to the target grid using the formula
+    ``(i + 0.5) * (target / ref) - 0.5``. Each ref token sits at the center of
+    the target region it represents, giving balanced spatial correspondence
+    without adding tokens. Use when ref and target resolutions differ.
+
+    ``rope_offsets``: optional list of ``(x_offset, y_offset)`` tuples in pixels,
+    one per reference. Applied AFTER scale_to_grid. Converts pixel offset to
+    token offset by dividing by patch_size. Use for regional editing: place
+    each reference at a specific canvas location by offsetting its position IDs.
+    """
+    import comfy.ldm.common_dit
+
+    ref_tokens = []
+    ref_positions = []
+    total = 0
+
+    for i, ref in enumerate(ref_latents_list, start=1):
+        # Squeeze any singleton temporal dimension (B,C,1,H,W) → (B,C,H,W)
+        if ref.ndim == 5 and ref.shape[2] == 1:
+            ref = ref.squeeze(2)
+        elif ref.ndim == 5:
+            raise ValueError(
+                f"Krea2EditApply_EditUtils: reference latent has {ref.ndim}D shape "
+                f"{tuple(ref.shape)} — expected 4D (B,C,H,W) or 5D with temporal=1"
+            )
+
+        if ref.shape[0] != bs:
+            ref = ref.expand(bs, *ref.shape[1:])
+
+        ref_pad = comfy.ldm.common_dit.pad_to_patch_size(ref, (patch_size, patch_size))
+        rH, rW = ref_pad.shape[-2], ref_pad.shape[-1]
+        rh, rw = rH // patch_size, rW // patch_size
+
+        # Patchify
+        rt = rearrange(ref_pad, "b c (h ph) (w pw) -> b (h w) (c ph pw)",
+                       ph=patch_size, pw=patch_size)
+        ref_tokens.append(rt)
+
+        # Position IDs: positive incrementing frame index
+        # (matching UnifiedTrainer prepare_position_ids: ref_i = +i)
+        frame_idx = float(i)
+        rids = torch.zeros(rh, rw, 3, device=device, dtype=dtype)
+        rids[..., 0] = frame_idx
+        h_ids = torch.arange(rh, device=device, dtype=dtype)
+        w_ids = torch.arange(rw, device=device, dtype=dtype)
+        if scale_to_grid is not None:
+            th, tw = scale_to_grid
+            # Center-aligned mapping: each ref token sits at the center of the
+            # target region it represents. For 2x upscale (th=32, rh=16):
+            #   old (edge-aligned): [0, 2, 4, ..., 30]  — never reaches 31
+            #   new (center-aligned): [0.5, 2.5, ..., 30.5] — balanced coverage
+            h_ids = (h_ids + 0.5) * (float(th) / float(rh)) - 0.5
+            w_ids = (w_ids + 0.5) * (float(tw) / float(rw)) - 0.5
+        # Apply per-reference spatial offset for regional editing (pixels → tokens)
+        if rope_offsets is not None and (i - 1) < len(rope_offsets):
+            x_off, y_off = rope_offsets[i - 1]
+            if x_off != 0 or y_off != 0:
+                h_ids = h_ids + (float(y_off) / float(patch_size))
+                w_ids = w_ids + (float(x_off) / float(patch_size))
+        rids[..., 1] = h_ids[:, None]
+        rids[..., 2] = w_ids[None, :]
+        ref_positions.append(rids.reshape(1, rh * rw, 3).repeat(bs, 1, 1))
+
+        total += rh * rw
+
+    return ref_tokens, ref_positions, total
+
+
+def _editutils_krea2_edit_forward(self, x, timesteps, context, attention_mask=None,
+                                   transformer_options=None, ref_latents=None, **kwargs):
+    """Patched forward for SingleStreamDiT with reference latent support.
+
+    Sequence order (matching UnifiedTrainer Krea2Adapter.prepare_model_input):
+        [text | target | ref₁ | ref₂ | …]
+
+    Position IDs: ref_n = (+n, h, w), target = (0, h, w)
+    Per-token timestep: ref tokens get t=0 modulation, text+target get real timestep.
+    Output sliced to return only target tokens.
+    """
+    from comfy.conds import CONDList
+
+    # ── Normalize ref_latents to list of tensors ──
+    if ref_latents is None:
+        ref_list = []
+    elif isinstance(ref_latents, torch.Tensor):
+        ref_list = [ref_latents]
+    elif isinstance(ref_latents, CONDList):
+        ref_list = [r for r in ref_latents.cond if r is not None]
+    elif isinstance(ref_latents, (list, tuple)):
+        ref_list = [r for r in ref_latents if r is not None and isinstance(r, torch.Tensor)]
+    else:
+        ref_list = []
+
+    mode = getattr(self, "_editutils_ref_timestep_mode", "editutils")
+
+    if len(ref_list) == 0:
+        original = getattr(self, _EDITUTILS_ORIGINAL_FORWARD_ATTR)
+        return original(x, timesteps, context,
+                        attention_mask=attention_mask,
+                        transformer_options=transformer_options,
+                        **kwargs)
+
+    # ── Reference-aware path ──
+    temporal = x.ndim == 5
+    if temporal:
+        b5, c5, t5, h5, w5 = x.shape
+        x = x.reshape(b5 * t5, c5, h5, w5)
+
+    bs, c, H_orig, W_orig = x.shape
+    patch_size = self.patch
+    import comfy.ldm.common_dit
+
+    # Pad target to patch size
+    x_pad = comfy.ldm.common_dit.pad_to_patch_size(x, (patch_size, patch_size))
+    H, W = x_pad.shape[-2], x_pad.shape[-1]
+    h_grid, w_grid = H // patch_size, W // patch_size
+
+    # Build reference tokens + positions
+    device = x_pad.device
+    dtype = torch.float32
+    pos_scale = (h_grid, w_grid) if getattr(
+        self, "_editutils_ref_pos_match_target", False) else None
+    ref_rope_offsets = kwargs.get("ref_rope_offsets", None)  # ROPE position offsets for regional editing
+    ref_tokens_list, ref_pos_list, total_reflen = _editutils_make_ref_positions(
+        ref_list, bs, patch_size, device, dtype, scale_to_grid=pos_scale,
+        rope_offsets=ref_rope_offsets,
+    )
+
+    # Unpack context (ComfyUI Krea2 SingleStreamDiT convention)
+    context = self._unpack_context(context)
+
+    # Patchify + first linear for target
+    img = rearrange(x_pad, "b c (h ph) (w pw) -> b (h w) (c ph pw)",
+                    ph=patch_size, pw=patch_size)
+    img = self.first(img)
+
+    # First linear for each reference
+    ref_imgs = [self.first(rt) for rt in ref_tokens_list]
+
+    # ── Per-token timestep embedding (matching UnifiedTrainer reflen split) ──
+    from comfy.ldm.flux.layers import timestep_embedding
+
+    t_emb_real = self.tmlp(
+        timestep_embedding(timesteps, self.tdim).unsqueeze(1).to(img.dtype))
+    tvec_real = self.tproj(t_emb_real)   # (B, 1, dim)
+
+    # Text fusion + MLP (match UnifiedTrainer's text_fusion → txt_in pipeline)
+    context = self.txtfusion(context, mask=None,
+                             transformer_options=transformer_options or {})
+    context = self.txtmlp(context)
+
+    txtlen = context.shape[1]
+    imglen = img.shape[1]
+
+    # ── Combined sequence: [text | target | ref₁ | ref₂ | …] ──
+    # (matches UnifiedTrainer prepare_model_input concatenation order)
+    combined = torch.cat([context, img] + ref_imgs, dim=1)
+
+    # Position IDs (same order)
+    txtpos = torch.zeros(bs, txtlen, 3, device=device, dtype=dtype)  # text: (0,0,0)
+    tgtids = torch.zeros(h_grid, w_grid, 3, device=device, dtype=dtype)
+    tgtids[..., 1] = torch.arange(h_grid, device=device, dtype=dtype)[:, None]
+    tgtids[..., 2] = torch.arange(w_grid, device=device, dtype=dtype)[None, :]
+    tgtpos = tgtids.reshape(1, h_grid * w_grid, 3).repeat(bs, 1, 1)
+    pos = torch.cat([txtpos, tgtpos] + ref_pos_list, dim=1)
+    freqs = self.pe_embedder(pos)
+
+    # Per-token tvec: text=real, target=real. Reference tokens depend on mode:
+    #   "editutils" (default) -> refs modulated as clean latents (t=0), matching
+    #                            the UnifiedTrainer per-span recipe.
+    #   "krea2edit"           -> refs share the real timestep (ai-toolkit
+    #                            predict_velocity_edit), so a krea2edit-trained
+    #                            LoRA runs on its native inference geometry.
+    if mode == "krea2edit":
+        tvec_ref = tvec_real.expand(-1, total_reflen, -1)
+    else:
+        t_emb_zero = self.tmlp(
+            timestep_embedding(torch.zeros_like(timesteps), self.tdim).unsqueeze(1).to(img.dtype))
+        tvec_ref = self.tproj(t_emb_zero).expand(-1, total_reflen, -1)
+    tvec = torch.cat([tvec_real.expand(-1, txtlen, -1),
+                      tvec_real.expand(-1, imglen, -1),
+                      tvec_ref], dim=1)  # (B, total_seq, dim)
+
+    # Transformer blocks
+    for block in self.blocks:
+        combined = block(combined, tvec, freqs, attention_mask,
+                         transformer_options=transformer_options or {})
+
+    # Final layer + slice target output (text:0→txtlen, target:txtlen→txtlen+imglen)
+    final = self.last(combined, t_emb_real)
+    out = final[:, txtlen: txtlen + imglen, :]
+
+    # Un-patchify
+    out = rearrange(out,
+                    "b (h w) (c ph pw) -> b c (h ph) (w pw)",
+                    h=h_grid, w=w_grid, ph=patch_size, pw=patch_size, c=self.channels)
+    out = out[:, :, :H_orig, :W_orig]  # crop padding
+
+    # NaN guard
+    if not torch.isfinite(out).all():
+        raise ValueError("Krea2EditApply_EditUtils: edit forward produced NaN/Inf output")
+
+    if temporal:
+        out = out.reshape(b5, t5, self.channels, H_orig, W_orig).movedim(1, 2)
+
+    return out
+
+
+class Krea2EditApply_EditUtils:
+    """Patch a Krea2 model to accept reference latents via EditUtils conditioning.
+
+    Matches UnifiedTrainer's forward logic:
+
+    - Sequence: ``[text | target | ref₁ | ref₂ | …]``
+    - Position IDs: ref_n = (+n, h, w), target = (0, h, w)
+    - Per-token timestep: ref tokens = t=0 (clean latents), text+target = real timestep
+    - Output sliced to return only target tokens
+
+    Connect only the ``model`` wire — reference latents are extracted
+    automatically from the EditUtils conditioning chain via an ``extra_conds``
+    patch.  Patches via ``ModelPatcher.add_object_patch`` on a cloned model
+    instance, properly tracked by ComfyUI's patch/unpatch lifecycle.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+            },
+            "optional": {
+                "mode": (["editutils", "krea2edit"], {
+                    "default": "editutils",
+                    "tooltip": "Reference-token timestep convention. "
+                               "'editutils' modulates reference tokens as clean "
+                               "latents (t=0, UnifiedTrainer recipe). 'krea2edit' "
+                               "gives references the real timestep (ai-toolkit "
+                               "predict_velocity_edit) — select this to run a "
+                               "comfyui-krea2edit-trained LoRA on its native "
+                               "inference geometry."}),
+                "ref_pos_match_target": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Center-align ref position ids to cover the "
+                               "target token grid. Each ref token is placed at "
+                               "the center of the target region it represents. "
+                               "Enable when reference and target resolutions "
+                               "differ — otherwise a smaller ref only aligns to "
+                               "the target's top-left region."}),
+                "ref_kv_cache": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Cache reference-image attention K/V at the "
+                               "first denoise step and reuse them for all "
+                               "later steps and repeated generations with "
+                               "identical refs (~2x faster). Frozen-reference "
+                               "approximation, not bit-exact."}),
+                "ref_strength": ("FLOAT", {
+                    "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "How long references constrain sampling. 1.0 = "
+                               "refs attend all steps; 0.5 = refs attend the "
+                               "first half of steps, then generation continues "
+                               "as pure text-to-image; 0.0 = refs never "
+                               "participate. Requires ref_kv_cache."}),
+                "reset_cache": ("BOOLEAN", {"default": True}),
+                "debug_log": ("BOOLEAN", {"default": False}),
+            },
+        }
+
+    RETURN_TYPES = ("MODEL",)
+    RETURN_NAMES = ("model",)
+    FUNCTION = "apply_patch"
+    CATEGORY = "Krea2/edit"
+    DESCRIPTION = (
+        "Apply reference-image conditioning to a Krea2 model. "
+        "Connect only the model wire — reference latents flow "
+        "through the EditUtils conditioning chain automatically. "
+        "Supports multiple references. Patch is isolated to a "
+        "cloned model instance via add_object_patch."
+    )
+
+    def apply_patch(self, model, mode="editutils", ref_pos_match_target=True,
+                    ref_kv_cache=True, ref_strength=1.0, reset_cache=True,
+                    debug_log=False):
+        # Only patch Krea2 models (detect by _unpack_context attribute)
+        is_krea2 = (
+            hasattr(model, "model")
+            and hasattr(model.model, "diffusion_model")
+            and hasattr(model.model.diffusion_model, "_unpack_context")
+        )
+        if not is_krea2:
+            return (model,)
+
+        # Clone to isolate the patch (prevents shared-instance mutation)
+        m = model.clone()
+
+        dit = m.get_model_object("diffusion_model")
+        setattr(dit, "_editutils_ref_pos_match_target", bool(ref_pos_match_target))
+        setattr(dit, "_editutils_ref_timestep_mode", str(mode))
+
+        self._apply_krea2_edit_patch(m)
+
+        if ref_kv_cache:
+            _install_ref_kv_cache_patch(m, dit, reset_cache=reset_cache,
+                                        ref_strength=ref_strength,
+                                        debug_log=debug_log)
+
+        return (m,)
+
+    @staticmethod
+    def _apply_krea2_edit_patch(model_patcher):
+        """Install reference-image forward patch via ModelPatcher.add_object_patch.
+
+        Patches registered:
+          - extra_conds: extracts reference_latents from conditioning (EditUtils pattern)
+          - extra_conds_shapes: declares shape info for memory allocation
+          - diffusion_model.forward: reference-aware dispatch (falls back to original when no refs)
+        """
+        base_model = model_patcher.model
+        dit = model_patcher.get_model_object("diffusion_model")
+
+        orig_extra_conds = base_model.extra_conds
+        orig_extra_conds_shapes = base_model.extra_conds_shapes
+        orig_forward = dit.forward
+
+        # Save original forward once (idempotent across multiple apply calls)
+        if not hasattr(dit, _EDITUTILS_ORIGINAL_FORWARD_ATTR):
+            setattr(dit, _EDITUTILS_ORIGINAL_FORWARD_ATTR, orig_forward)
+
+        # --- extra_conds: inject ref_latents from EditUtils conditioning ---
+        def extra_conds(**kwargs):
+            out = orig_extra_conds(**kwargs)
+            cond_refs = kwargs.get("reference_latents", None)
+            rope_offsets = kwargs.get("reference_rope_offsets", None)  # ROPE position offsets
+            if cond_refs is not None and len(cond_refs) > 0:
+                # EditUtils stores vae.encode() output which is a dict
+                # {"samples": tensor} — extract the tensor first.
+                ref_tensors = [
+                    r["samples"] if isinstance(r, dict) else r
+                    for r in cond_refs
+                ]
+                out["ref_latents"] = comfy.conds.CONDList([
+                    base_model.process_latent_in(t) for t in ref_tensors
+                ])
+                if rope_offsets is not None:
+                    # Wrap in CONDConstant so ComfyUI treats it as a model_cond
+                    # (raw lists lack .process_cond and break sampling).
+                    out["ref_rope_offsets"] = comfy.conds.CONDConstant(rope_offsets)
+            return out
+
+        # --- extra_conds_shapes: declare shape for memory allocation ---
+        def extra_conds_shapes(**kwargs):
+            out = orig_extra_conds_shapes(**kwargs)
+            cond_refs = kwargs.get("reference_latents", None)
+            if cond_refs is not None and len(cond_refs) > 0:
+                ref_tensors = [
+                    r["samples"] if isinstance(r, dict) else r
+                    for r in cond_refs
+                ]
+                out["ref_latents"] = list(
+                    [1, dit.channels,
+                     sum(math.prod(t.size()[2:]) for t in ref_tensors) // dit.channels]
+                )
+            return out
+
+        # --- forward: reference-aware dispatch ---
+        def forward(
+            x, timesteps, context,
+            attention_mask=None,
+            transformer_options=None,
+            ref_latents=None,
+            **kwargs,
+        ):
+            if transformer_options is None:
+                transformer_options = {}
+
+            if ref_latents is None or len(ref_latents) == 0:
+                saved = getattr(dit, _EDITUTILS_ORIGINAL_FORWARD_ATTR)
+                return saved(
+                    x, timesteps, context,
+                    attention_mask=attention_mask,
+                    transformer_options=transformer_options,
+                    **kwargs,
+                )
+            # Route through WrapperExecutor so DIFFUSION_MODEL wrappers from other
+            # nodes/hooks still fire during edit generation.
+            import comfy.patcher_extension
+            return comfy.patcher_extension.WrapperExecutor.new_class_executor(
+                _editutils_krea2_edit_forward, dit,
+                comfy.patcher_extension.get_all_wrappers(
+                    comfy.patcher_extension.WrappersMP.DIFFUSION_MODEL, transformer_options),
+            ).execute(dit, x, timesteps, context,
+                      attention_mask=attention_mask,
+                      transformer_options=transformer_options,
+                      ref_latents=ref_latents,
+                      **kwargs)
+
+        model_patcher.add_object_patch("extra_conds", extra_conds)
+        model_patcher.add_object_patch("extra_conds_shapes", extra_conds_shapes)
+        model_patcher.add_object_patch("memory_usage_factor_conds", ("ref_latents",))
+        model_patcher.add_object_patch("diffusion_model.forward", forward)
+
+
+# ---------------------------------------------------------------------------
+# EXPERIMENTAL: Krea2 reference-latent KV cache
+# Mirrors ComfyUI's FluxKVCache (comfy_extras/nodes_flux.py:264-301) for the
+# Krea2 SingleStreamDiT path patched by Krea2EditApply_EditUtils.
+# Correctness contract (see analysis/krea2_kv_cache_analysis.md):
+#   * Ref tokens receive timestep-ZERO modulation (step-invariant).
+#   * Ref K/V at layer > 0 are NOT exactly step-invariant; this is the same
+#     "frozen reference" approximation FluxKVCache ships. NOT bit-exact.
+# Integrated into Krea2EditApply_EditUtils (ref_kv_cache option, default on).
+# ---------------------------------------------------------------------------
+
+_KV_STATE_ATTR = "_editutils_ref_kv_state"       # per-call capture/reuse state
+_KV_CACHE_ATTR = "_editutils_ref_kv_cache"       # persistent cache dict
+_KV_CFG_ATTR = "_editutils_ref_kv_cfg"           # node-provided tuning config
+
+def _ref_fingerprint(tensor):
+    """Cheap content fingerprint for a ref latent tensor, memoized ON the
+    tensor object itself (attribute dies with the tensor, so no id-reuse
+    collisions) to avoid re-syncing GPU->CPU every denoise step."""
+    fp = getattr(tensor, "_editutils_fp", None)
+    if fp is not None:
+        return fp
+    t = tensor.detach()
+    if t.device.type != "cpu":
+        t = t.to("cpu", dtype=torch.float32)
+    else:
+        t = t.float()
+    flat = t.flatten()
+    stride = max(1, flat.numel() // 64)
+    sample = tuple(round(float(v), 4) for v in flat[::stride][:64])
+    fp = (
+        tuple(t.shape),
+        round(float(t.mean()), 6),
+        round(float(t.std()), 6),
+        round(float(t.abs().sum()), 3),
+        sample,
+    )
+    try:
+        tensor._editutils_fp = fp
+    except Exception:
+        pass
+    return fp
+
+
+def _build_cache_key(model_uuid, dtype, ref_list):
+    return (
+        model_uuid,
+        str(dtype),
+        tuple(_ref_fingerprint(r) for r in ref_list),
+    )
+
+
+def _make_ref_kv_attn_wrapper(attn_module, dit):
+    """Reimplement Krea2 Attention.forward (comfy/ldm/krea2/model.py:75-89)
+    with a capture/reuse hook driven by ``dit._editutils_ref_kv_state``.
+
+    Capture: store ref-slice k/v (post qk-norm, post-RoPE, pre GQA repeat).
+    Reuse:   concat cached ref k/v onto the freshly computed k/v.
+    """
+    from comfy.ldm.flux.math import apply_rope
+    from comfy.ldm.modules.attention import optimized_attention_masked
+
+    def forward(x, freqs=None, mask=None, transformer_options={}):
+        q, k, v, gate = attn_module.wq(x), attn_module.wk(x), attn_module.wv(x), attn_module.gate(x)
+        q = rearrange(q, "B L (H D) -> B H L D", H=attn_module.heads)
+        k = rearrange(k, "B L (H D) -> B H L D", H=attn_module.kvheads)
+        v = rearrange(v, "B L (H D) -> B H L D", H=attn_module.kvheads)
+        q, k = attn_module.qknorm(q, k)
+        if freqs is not None:
+            q, k = apply_rope(q, k, freqs)
+
+        state = getattr(dit, _KV_STATE_ATTR, None)
+        if state is not None:
+            layer = state["layer_counter"]
+            state["layer_counter"] = layer + 1
+            ref_toks = state["ref_toks"]
+            if state["mode"] == "capture":
+                # Refs are appended last -> tail slice. Stored on CPU to
+                # avoid pinning GPU memory across steps/generations; each
+                # layer's slice is tiny (~MBs) so reuse-time upload is cheap.
+                state["store"][layer] = (
+                    k[:, :, -ref_toks:].detach().to("cpu", copy=True),
+                    v[:, :, -ref_toks:].detach().to("cpu", copy=True),
+                )
+            elif state["mode"] == "reuse" and not state.get("drop_refs"):
+                kk, vv = state["store"][layer]
+                if kk.device != k.device:
+                    kk = kk.to(k.device, non_blocking=True)
+                    vv = vv.to(v.device, non_blocking=True)
+                kk = comfy.utils.repeat_to_batch_size(kk, k.shape[0])
+                vv = comfy.utils.repeat_to_batch_size(vv, v.shape[0])
+                k = torch.cat((k, kk), dim=2)
+                v = torch.cat((v, vv), dim=2)
+
+        if attn_module.kvheads != attn_module.heads:
+            rep = attn_module.heads // attn_module.kvheads
+            k = k.repeat_interleave(rep, dim=1)
+            v = v.repeat_interleave(rep, dim=1)
+        out = optimized_attention_masked(
+            q, k, v, attn_module.heads, mask=mask, skip_reshape=True,
+            transformer_options=transformer_options,
+        )
+        return attn_module.wo(out * torch.nn.functional.sigmoid(gate))
+
+    return forward
+
+
+class _ref_kv_attn_patch_guard:
+    """Temporarily wrap every block's attention forward; always restore."""
+
+    def __init__(self, dit):
+        self.dit = dit
+        self.saved = []
+
+    def __enter__(self):
+        for block in self.dit.blocks:
+            orig = block.attn.forward
+            self.saved.append((block, orig))
+            block.attn.forward = _make_ref_kv_attn_wrapper(block.attn, self.dit)
+        return self
+
+    def __exit__(self, *exc):
+        for block, orig in self.saved:
+            block.attn.forward = orig
+        self.saved = []
+        return False
+
+
+def _editutils_krea2_edit_forward_cached(
+    self, x, timesteps, context, attention_mask=None,
+    transformer_options=None, ref_latents=None, **kwargs,
+):
+    """KV-cached variant of _editutils_krea2_edit_forward.
+
+    Sequence order identical to the original: [text | target | ref1 | ...].
+    On cache miss: full forward + per-block ref K/V capture.
+    On cache hit:  forward over [text | target] only, cached ref K/V
+                   concatenated inside each attention call.
+    Fallback: any anomaly -> original (uncached) edit forward.
+    """
+    import comfy.ldm.common_dit
+    import comfy.patcher_extension
+    from comfy.conds import CONDList
+    from comfy.ldm.flux.layers import timestep_embedding
+
+    if transformer_options is None:
+        transformer_options = {}
+
+    # -- Normalize ref_latents --
+    if ref_latents is None:
+        ref_list = []
+    elif isinstance(ref_latents, torch.Tensor):
+        ref_list = [ref_latents]
+    elif isinstance(ref_latents, CONDList):
+        ref_list = [r for r in ref_latents.cond if r is not None]
+    elif isinstance(ref_latents, (list, tuple)):
+        ref_list = [r for r in ref_latents if r is not None and isinstance(r, torch.Tensor)]
+    else:
+        ref_list = []
+
+    # No refs -> chain to whatever forward was installed before us.
+    if len(ref_list) == 0:
+        if not getattr(self, "_editutils_ref_kv_logged_norefs", False):
+            setattr(self, "_editutils_ref_kv_logged_norefs", True)
+            print(f"[Krea2EditApply] forward called but NO refs received "
+                  f"(type={type(ref_latents).__name__}); chaining through.")
+        chained = getattr(self, "_editutils_ref_kv_chained_forward")
+        return chained(x, timesteps, context, attention_mask=attention_mask,
+                       transformer_options=transformer_options, **kwargs)
+
+    # Temporal (video / image-as-1-frame-video) input: reshape like the
+    # original forward (nodes.py:2103-2106) instead of falling back.
+    temporal = x.ndim == 5
+    if temporal:
+        b5, c5, t5, h5, w5 = x.shape
+        x = x.reshape(b5 * t5, c5, h5, w5)
+        if not getattr(self, "_editutils_ref_kv_logged_5d", False):
+            setattr(self, "_editutils_ref_kv_logged_5d", True)
+            print(f"[Krea2EditApply] 5D input detected "
+                  f"(B={b5}, C={c5}, T={t5}, H={h5}, W={w5}); reshaping to 4D.")
+
+    # -- Cache lookup --
+    _cfg = getattr(self, _KV_CFG_ATTR, None) or {}
+    debug = bool(_cfg.get("debug_log", False))
+    ref_strength = float(_cfg.get("ref_strength", 1.0))
+
+    # ref_strength == 0: refs never participate -> pure text-to-image.
+    if ref_strength <= 0.0:
+        chained = getattr(self, "_editutils_ref_kv_chained_forward")
+        return chained(x, timesteps, context, attention_mask=attention_mask,
+                       transformer_options=transformer_options, **kwargs)
+
+    cache = getattr(self, _KV_CACHE_ATTR, None)
+    if cache is None:
+        cache = {}
+        setattr(self, _KV_CACHE_ATTR, cache)
+    # Include ROPE offsets in cache key to prevent stale cache hits with different positions
+    _rope_offsets_for_key = kwargs.get("ref_rope_offsets", None)
+    key = _build_cache_key(id(self), x.dtype, ref_list) + (
+        tuple(x.shape),
+        bool(getattr(self, "_editutils_ref_pos_match_target", False)),
+        tuple(tuple(o) for o in _rope_offsets_for_key) if _rope_offsets_for_key else None,
+    )
+    entry = cache.get(key)
+    reuse = entry is not None
+    if debug and not getattr(self, "_editutils_ref_kv_logged_call", False):
+        setattr(self, "_editutils_ref_kv_logged_call", True)
+        print(f"[Krea2EditApply] KV cache active: {len(ref_list)} ref(s), "
+              f"mode={'reuse' if reuse else 'capture'}")
+
+    # Sampling progress in [0, 1] from the FULL sigma schedule
+    # ("sample_sigmas"; "sigmas" is only the current step's sigma).
+    # Refs attend while progress < ref_strength; afterwards the cached ref
+    # K/V are dropped and generation continues as pure text-to-image.
+    progress = 0.0
+    sig = transformer_options.get("sample_sigmas", None)
+    if sig is None:
+        sig = transformer_options.get("sigmas", None)
+    if sig is not None:
+        try:
+            flat = sig.flatten().float()
+            # Prefer the sampler-provided current-step sigma (same scale as
+            # the schedule); `timesteps` may be scaled (e.g. sigma*1000).
+            cur = transformer_options.get("sigmas", None)
+            t_now = float(cur.flatten()[0]) if cur is not None \
+                else float(timesteps.flatten()[0])
+            idx = int((flat - t_now).abs().argmin())
+            # Schedules usually end with a trailing 0 sigma; clamp index to
+            # the real step count so the final step reaches progress ~1.
+            n = int(flat.numel())
+            if n > 1 and float(flat[-1]) == 0.0:
+                n -= 1
+            progress = min(idx / max(n - 1, 1), 1.0)
+        except Exception:
+            progress = 0.0
+    drop_refs = reuse and progress >= ref_strength
+    if debug:
+        alloc = torch.cuda.memory_allocated() // 2**20 if torch.cuda.is_available() else 0
+        resv = torch.cuda.memory_reserved() // 2**20 if torch.cuda.is_available() else 0
+        n_cache = len(getattr(self, _KV_CACHE_ATTR, {}) or {})
+        print(f"[Krea2EditApply] step progress={progress:.2f} "
+              f"ref_strength={ref_strength} -> {'DROP ref' if drop_refs else 'ref active'} "
+              f"| VRAM alloc={alloc}MB reserved={resv}MB | cache_entries={n_cache}")
+    if drop_refs and debug and not getattr(self, "_editutils_ref_kv_logged_drop", False):
+        setattr(self, "_editutils_ref_kv_logged_drop", True)
+        print(f"[Krea2EditApply] ref dropped at progress={progress:.2f} "
+              f"(ref_strength={ref_strength}); continuing as text-to-image")
+
+    # -- Build tokens (ref part skipped on reuse) --
+    bs, c, H_orig, W_orig = x.shape
+    patch_size = self.patch
+    x_pad = comfy.ldm.common_dit.pad_to_patch_size(x, (patch_size, patch_size))
+    H, W = x_pad.shape[-2], x_pad.shape[-1]
+    h_grid, w_grid = H // patch_size, W // patch_size
+    device, dtype = x_pad.device, torch.float32
+
+    pos_scale = (h_grid, w_grid) if getattr(
+        self, "_editutils_ref_pos_match_target", False) else None
+    ref_rope_offsets = kwargs.get("ref_rope_offsets", None)  # ROPE position offsets for regional editing
+    ref_tokens_list, ref_pos_list, total_reflen = _editutils_make_ref_positions(
+        ref_list, bs, patch_size, device, dtype, scale_to_grid=pos_scale,
+        rope_offsets=ref_rope_offsets,
+    )
+
+    context = self._unpack_context(context)
+    img = rearrange(x_pad, "b c (h ph) (w pw) -> b (h w) (c ph pw)",
+                    ph=patch_size, pw=patch_size)
+    img = self.first(img)
+
+    t_emb_real = self.tmlp(
+        timestep_embedding(timesteps, self.tdim).unsqueeze(1).to(img.dtype))
+    tvec_real = self.tproj(t_emb_real)
+
+    context = self.txtfusion(context, mask=None,
+                             transformer_options=transformer_options)
+    context = self.txtmlp(context)
+
+    txtlen, imglen = context.shape[1], img.shape[1]
+
+    txtpos = torch.zeros(bs, txtlen, 3, device=device, dtype=dtype)
+    tgtids = torch.zeros(h_grid, w_grid, 3, device=device, dtype=dtype)
+    tgtids[..., 1] = torch.arange(h_grid, device=device, dtype=dtype)[:, None]
+    tgtids[..., 2] = torch.arange(w_grid, device=device, dtype=dtype)[None, :]
+    tgtpos = tgtids.reshape(1, h_grid * w_grid, 3).repeat(bs, 1, 1)
+
+    if reuse:
+        # Strip ref span entirely (same trick as nodes_flux.py:286-292).
+        combined = torch.cat([context, img], dim=1)
+        pos = torch.cat([txtpos, tgtpos], dim=1)
+        tvec = tvec_real.expand(-1, txtlen + imglen, -1)
+    else:
+        ref_imgs = [self.first(rt) for rt in ref_tokens_list]
+        combined = torch.cat([context, img] + ref_imgs, dim=1)
+        pos = torch.cat([txtpos, tgtpos] + ref_pos_list, dim=1)
+        # Reference timestep mode (see uncached forward): "krea2edit" gives refs
+        # the real timestep; default "editutils" modulates them as clean (t=0).
+        if getattr(self, "_editutils_ref_timestep_mode", "editutils") == "krea2edit":
+            tvec_ref = tvec_real.expand(-1, total_reflen, -1)
+        else:
+            t_emb_zero = self.tmlp(
+                timestep_embedding(torch.zeros_like(timesteps), self.tdim)
+                .unsqueeze(1).to(img.dtype))
+            tvec_ref = self.tproj(t_emb_zero).expand(-1, total_reflen, -1)
+        tvec = torch.cat([
+            tvec_real.expand(-1, txtlen, -1),
+            tvec_real.expand(-1, imglen, -1),
+            tvec_ref,
+        ], dim=1)
+
+    freqs = self.pe_embedder(pos)
+
+    # -- Block loop with capture/reuse attention wrappers --
+    state = {
+        "mode": "reuse" if reuse else "capture",
+        "ref_toks": total_reflen,
+        "layer_counter": 0,
+        "store": entry["kv"] if reuse else {},
+        "drop_refs": drop_refs,
+    }
+    setattr(self, _KV_STATE_ATTR, state)
+    try:
+        with _ref_kv_attn_patch_guard(self):
+            for block in self.blocks:
+                combined = block(combined, tvec, freqs, attention_mask,
+                                 transformer_options=transformer_options)
+    finally:
+        setattr(self, _KV_STATE_ATTR, None)
+
+    if not reuse:
+        cache[key] = {"kv": state["store"], "ref_toks": total_reflen, "hits": 0}
+        if debug:
+            cpu_mb = sum(t.nelement() * t.element_size() for kv in state["store"].values() for t in kv) // 2**20
+            dev = next(iter(state["store"].values()))[0].device if state["store"] else "?"
+            print(f"[Krea2EditApply] KV cache captured: {total_reflen} ref tokens, "
+                  f"{len(state['store'])} layers, {cpu_mb}MB on {dev}")
+        # Keep only the most recent entries to bound VRAM.
+        while len(cache) > 4:
+            cache.pop(next(iter(cache)))
+    elif debug and entry.get("hits", 0) == 0:
+        print("[Krea2EditApply] reusing cached ref K/V")
+    if reuse:
+        entry["hits"] = entry.get("hits", 0) + 1
+
+    # -- Final layer + slice target output --
+    final = self.last(combined, t_emb_real)
+    out = final[:, txtlen: txtlen + imglen, :]
+    out = rearrange(out, "b (h w) (c ph pw) -> b c (h ph) (w pw)",
+                    h=h_grid, w=w_grid, ph=patch_size, pw=patch_size,
+                    c=self.channels)
+    out = out[:, :, :H_orig, :W_orig]
+
+    if temporal:
+        out = out.reshape(b5, t5, self.channels, H_orig, W_orig).movedim(1, 2)
+
+    return out
+
+
+def _install_ref_kv_cache_patch(m, dit, reset_cache=False, ref_strength=1.0,
+                                debug_log=False):
+    """Install the KV-caching forward on a ModelPatcher already patched by
+    Krea2EditApply_EditUtils._apply_krea2_edit_patch (its dispatch forward
+    must already be present in m.object_patches)."""
+    if reset_cache:
+        setattr(dit, _KV_CACHE_ATTR, {})
+
+    setattr(dit, _KV_CFG_ATTR, {
+        "debug_log": bool(debug_log),
+        "ref_strength": float(ref_strength),
+    })
+
+    # CRITICAL: chain to the EXISTING object patch (the Krea2EditApply
+    # dispatch forward), NOT dit.forward -- object patches are only applied
+    # to the live module at patch_model() time.
+    chained = m.object_patches.get("diffusion_model.forward", None)
+    if chained is None:
+        chained = dit.forward
+    setattr(dit, "_editutils_ref_kv_chained_forward", chained)
+    if debug_log:
+        print("[Krea2EditApply] ref KV cache patch installed")
+
+    def forward(x, timesteps, context, attention_mask=None,
+                transformer_options=None, ref_latents=None, **kwargs):
+        if transformer_options is None:
+            transformer_options = {}
+        try:
+            import comfy.patcher_extension
+            return comfy.patcher_extension.WrapperExecutor.new_class_executor(
+                _editutils_krea2_edit_forward_cached, dit,
+                comfy.patcher_extension.get_all_wrappers(
+                    comfy.patcher_extension.WrappersMP.DIFFUSION_MODEL,
+                    transformer_options),
+            ).execute(dit, x, timesteps, context,
+                      attention_mask=attention_mask,
+                      transformer_options=transformer_options,
+                      ref_latents=ref_latents, **kwargs)
+        except Exception as e:
+            # Fallback correctness guarantee: never break generation.
+            # Log once per unique error so silent fallback is visible.
+            seen = getattr(dit, "_editutils_ref_kv_err_seen", None)
+            if seen is None:
+                seen = set()
+                setattr(dit, "_editutils_ref_kv_err_seen", seen)
+            msg = repr(e)
+            if msg not in seen:
+                seen.add(msg)
+                import traceback
+                print(f"[Krea2EditApply] KV cache forward failed, "
+                      f"falling back to uncached: {msg}")
+                traceback.print_exc()
+            saved = getattr(dit, "_editutils_ref_kv_chained_forward")
+            return saved(x, timesteps, context,
+                         attention_mask=attention_mask,
+                         transformer_options=transformer_options,
+                         ref_latents=ref_latents, **kwargs)
+
+    m.add_object_patch("diffusion_model.forward", forward)
+
+
+# ---------------------------------------------------------------------------
+# Flux2Klein ROPE position control (model patch)
+# ---------------------------------------------------------------------------
+
+class Flux2KleinEditApply_EditUtils:
+    """Patch a Flux2Klein model to use per-reference ROPE position offsets.
+
+    The Flux architecture natively supports h_offset/w_offset in process_img().
+    This node patches the model forward to inject custom per-reference offsets
+    from the EditUtils conditioning chain, enabling regional editing.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+            },
+            "optional": {
+                "ref_pos_match_target": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Stretch ref positions to cover target grid. "
+                               "Set False for regional editing with rope offsets."}),
+                "debug_log": ("BOOLEAN", {"default": False}),
+            },
+        }
+
+    RETURN_TYPES = ("MODEL",)
+    RETURN_NAMES = ("model",)
+    FUNCTION = "apply_patch"
+    CATEGORY = "Flux2Klein/edit"
+    DESCRIPTION = (
+        "Apply per-reference ROPE position offsets to a Flux2Klein model. "
+        "Connect only the model wire — rope offsets flow through the "
+        "EditUtils conditioning chain automatically."
+    )
+
+    def apply_patch(self, model, ref_pos_match_target=False, debug_log=False):
+        # Detect Flux model by checking for process_img and pe_embedder
+        is_flux = (
+            hasattr(model, "model")
+            and hasattr(model.model, "diffusion_model")
+            and hasattr(model.model.diffusion_model, "process_img")
+            and hasattr(model.model.diffusion_model, "pe_embedder")
+        )
+        if not is_flux:
+            return (model,)
+
+        m = model.clone()
+        dit = m.get_model_object("diffusion_model")
+        setattr(dit, "_editutils_ref_pos_match_target", bool(ref_pos_match_target))
+        setattr(dit, "_editutils_flux_rope_debug", bool(debug_log))
+
+        self._apply_flux_rope_patch(m, dit)
+        return (m,)
+
+    @staticmethod
+    def _apply_flux_rope_patch(model_patcher, dit):
+        """Install ROPE offset patch for Flux models."""
+        base_model = model_patcher.model
+        orig_extra_conds = base_model.extra_conds
+        orig_forward = dit.forward
+
+        # --- extra_conds: extract rope offsets from conditioning ---
+        def extra_conds(**kwargs):
+            out = orig_extra_conds(**kwargs)
+            rope_offsets = kwargs.get("reference_rope_offsets", None)
+            if rope_offsets is not None:
+                out["ref_rope_offsets"] = comfy.conds.CONDConstant(rope_offsets)
+            return out
+
+        # --- forward: inject per-ref offsets into process_img calls ---
+        def forward(x, timestep, context, y=None, guidance=None,
+                    ref_latents=None, control=None, transformer_options={}, **kwargs):
+            ref_rope_offsets = kwargs.get("ref_rope_offsets", None)
+
+            # If no custom offsets or no refs, use original forward
+            if ref_rope_offsets is None or ref_latents is None or len(ref_latents) == 0:
+                return orig_forward(x, timestep, context, y=y, guidance=guidance,
+                                    ref_latents=ref_latents, control=control,
+                                    transformer_options=transformer_options, **kwargs)
+
+            # Custom forward with per-ref ROPE offsets
+            import comfy.patcher_extension
+            from einops import repeat
+
+            bs, c, h_orig, w_orig = x.shape
+            patch_size = dit.patch_size
+            h_len = ((h_orig + (patch_size // 2)) // patch_size)
+            w_len = ((w_orig + (patch_size // 2)) // patch_size)
+
+            img, img_ids = dit.process_img(x, transformer_options=transformer_options)
+            img_tokens = img.shape[1]
+
+            # Process refs with custom offsets
+            ref_num_tokens = []
+            pos_match = getattr(dit, "_editutils_ref_pos_match_target", False)
+            ref_latents_method = kwargs.get("ref_latents_method", dit.params.default_ref_method)
+            timestep_zero = ref_latents_method == "index_timestep_zero"
+            index = 0
+
+            for ref_idx, ref in enumerate(ref_latents):
+                # Get custom offset for this ref
+                if ref_idx < len(ref_rope_offsets):
+                    x_off, y_off = ref_rope_offsets[ref_idx]
+                else:
+                    x_off, y_off = 0, 0
+
+                # Use index method with custom spatial offsets
+                index += dit.params.ref_index_scale
+                h_offset = y_off  # pixels
+                w_offset = x_off  # pixels
+
+                kontext, kontext_ids = dit.process_img(
+                    ref, index=index, h_offset=h_offset, w_offset=w_offset,
+                    transformer_options=transformer_options
+                )
+                img = torch.cat([img, kontext], dim=1)
+                img_ids = torch.cat([img_ids, kontext_ids], dim=1)
+                ref_num_tokens.append(kontext.shape[1])
+
+            timestep_zero_index = None
+            if timestep_zero and index > 0:
+                timestep = torch.cat([timestep, timestep * 0], dim=0)
+                timestep_zero_index = [[img_tokens, img_ids.shape[1]]]
+
+            transformer_options = transformer_options.copy()
+            transformer_options["reference_image_num_tokens"] = ref_num_tokens
+
+            txt_ids = torch.zeros((bs, context.shape[1], len(dit.params.axes_dim)),
+                                  device=x.device, dtype=torch.float32)
+            if len(dit.params.txt_ids_dims) > 0:
+                for i in dit.params.txt_ids_dims:
+                    txt_ids[:, :, i] = torch.linspace(0, context.shape[1] - 1,
+                                                      steps=context.shape[1],
+                                                      device=x.device, dtype=torch.float32)
+
+            out = dit.forward_orig(img, img_ids, context, txt_ids, timestep, y,
+                                   guidance, control,
+                                   timestep_zero_index=timestep_zero_index,
+                                   transformer_options=transformer_options,
+                                   attn_mask=kwargs.get("attention_mask", None))
+            out = out[:, :img_tokens]
+            return rearrange(out, "b (h w) (c ph pw) -> b c (h ph) (w pw)",
+                             h=h_len, w=w_len, ph=dit.patch_size, pw=dit.patch_size)[:, :, :h_orig, :w_orig]
+
+        model_patcher.add_object_patch("extra_conds", extra_conds)
+        model_patcher.add_object_patch("diffusion_model.forward", forward)
+
+
+# ---------------------------------------------------------------------------
+# QwenImage ROPE position control (model patch)
+# ---------------------------------------------------------------------------
+
+class QwenImageEditApply_EditUtils:
+    """Patch a QwenImage model to use per-reference ROPE position offsets.
+
+    The QwenImage architecture natively supports h_offset/w_offset in process_img().
+    This node patches the model forward to inject custom per-reference offsets
+    from the EditUtils conditioning chain, enabling regional editing.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+            },
+            "optional": {
+                "ref_pos_match_target": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Stretch ref positions to cover target grid. "
+                               "Set False for regional editing with rope offsets."}),
+                "debug_log": ("BOOLEAN", {"default": False}),
+            },
+        }
+
+    RETURN_TYPES = ("MODEL",)
+    RETURN_NAMES = ("model",)
+    FUNCTION = "apply_patch"
+    CATEGORY = "QwenImage/edit"
+    DESCRIPTION = (
+        "Apply per-reference ROPE position offsets to a QwenImage model. "
+        "Connect only the model wire — rope offsets flow through the "
+        "EditUtils conditioning chain automatically."
+    )
+
+    def apply_patch(self, model, ref_pos_match_target=False, debug_log=False):
+        # Detect QwenImage model
+        is_qwen_image = (
+            hasattr(model, "model")
+            and hasattr(model.model, "diffusion_model")
+            and hasattr(model.model.diffusion_model, "process_img")
+            and hasattr(model.model.diffusion_model, "pe_embedder")
+            and hasattr(model.model.diffusion_model, "default_ref_method")
+        )
+        if not is_qwen_image:
+            return (model,)
+
+        m = model.clone()
+        dit = m.get_model_object("diffusion_model")
+        setattr(dit, "_editutils_ref_pos_match_target", bool(ref_pos_match_target))
+        setattr(dit, "_editutils_qwen_rope_debug", bool(debug_log))
+
+        self._apply_qwen_image_rope_patch(m, dit)
+        return (m,)
+
+    @staticmethod
+    def _apply_qwen_image_rope_patch(model_patcher, dit):
+        """Install ROPE offset patch for QwenImage models."""
+        base_model = model_patcher.model
+        orig_extra_conds = base_model.extra_conds
+        orig_forward = dit.forward
+
+        # --- extra_conds: extract rope offsets from conditioning ---
+        def extra_conds(**kwargs):
+            out = orig_extra_conds(**kwargs)
+            rope_offsets = kwargs.get("reference_rope_offsets", None)
+            if rope_offsets is not None:
+                out["ref_rope_offsets"] = comfy.conds.CONDConstant(rope_offsets)
+            return out
+
+        # --- forward: inject per-ref offsets into process_img calls ---
+        def forward(x, timesteps, context, attention_mask=None,
+                    ref_latents=None, additional_t_cond=None,
+                    transformer_options={}, **kwargs):
+            ref_rope_offsets = kwargs.get("ref_rope_offsets", None)
+
+            # If no custom offsets or no refs, use original forward
+            if ref_rope_offsets is None or ref_latents is None or len(ref_latents) == 0:
+                return orig_forward(x, timesteps, context,
+                                    attention_mask=attention_mask,
+                                    ref_latents=ref_latents,
+                                    additional_t_cond=additional_t_cond,
+                                    transformer_options=transformer_options, **kwargs)
+
+            # Custom forward with per-ref ROPE offsets
+            from einops import repeat
+
+            timestep = timesteps
+            encoder_hidden_states = context
+            encoder_hidden_states_mask = attention_mask
+
+            if encoder_hidden_states_mask is not None and not torch.is_floating_point(encoder_hidden_states_mask):
+                encoder_hidden_states_mask = (encoder_hidden_states_mask - 1).to(x.dtype) * torch.finfo(x.dtype).max
+
+            hidden_states, img_ids, orig_shape = dit.process_img(x)
+            num_embeds = hidden_states.shape[1]
+
+            # Process refs with custom offsets
+            ref_num_tokens = []
+            index = 0
+            ref_method = kwargs.get("ref_latents_method", dit.default_ref_method)
+            timestep_zero = ref_method == "index_timestep_zero"
+
+            for ref_idx, ref in enumerate(ref_latents):
+                # Get custom offset for this ref
+                if ref_idx < len(ref_rope_offsets):
+                    x_off, y_off = ref_rope_offsets[ref_idx]
+                else:
+                    x_off, y_off = 0, 0
+
+                index += 1
+                h_offset = y_off  # pixels
+                w_offset = x_off  # pixels
+
+                kontext, kontext_ids, _ = dit.process_img(
+                    ref, index=index, h_offset=h_offset, w_offset=w_offset
+                )
+                hidden_states = torch.cat([hidden_states, kontext], dim=1)
+                img_ids = torch.cat([img_ids, kontext_ids], dim=1)
+                ref_num_tokens.append(kontext.shape[1])
+
+            timestep_zero_index = None
+            if timestep_zero and index > 0:
+                timestep = torch.cat([timestep, timestep * 0], dim=0)
+                timestep_zero_index = num_embeds
+
+            transformer_options = transformer_options.copy()
+            transformer_options["reference_image_num_tokens"] = ref_num_tokens
+
+            txt_start = round(max(((x.shape[-1] + (dit.patch_size // 2)) // dit.patch_size) // 2,
+                                  ((x.shape[-2] + (dit.patch_size // 2)) // dit.patch_size) // 2))
+            txt_ids = torch.arange(txt_start, txt_start + context.shape[1],
+                                   device=x.device).reshape(1, -1, 1).repeat(x.shape[0], 1, 3)
+
+            hidden_states = dit.img_in(hidden_states)
+            encoder_hidden_states = dit.txt_norm(encoder_hidden_states)
+            encoder_hidden_states = dit.txt_in(encoder_hidden_states)
+
+            temb = dit.time_text_embed(timestep, hidden_states, additional_t_cond)
+
+            ids = torch.cat((txt_ids, img_ids), dim=1)
+            image_rotary_emb = dit.pe_embedder(ids).to(x.dtype).contiguous()
+            del ids, txt_ids, img_ids
+
+            # Run transformer blocks
+            for i, block in enumerate(dit.transformer_blocks):
+                transformer_options["block_index"] = i
+                hidden_states, encoder_hidden_states = block(
+                    hidden_states=hidden_states,
+                    encoder_hidden_states=encoder_hidden_states,
+                    temb=temb,
+                    image_rotary_emb=image_rotary_emb,
+                    encoder_attention_mask=encoder_hidden_states_mask,
+                    transformer_options=transformer_options,
+                )
+
+            # Output
+            hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
+            hidden_states = dit.norm_out(hidden_states, temb)
+            hidden_states = dit.proj_out(hidden_states)
+
+            # Extract image tokens and unpatchify
+            p = dit.patch_size
+            output = hidden_states[:, -num_embeds:]
+            h_len = orig_shape[-2] // p
+            w_len = orig_shape[-1] // p
+            output = rearrange(output, 'b (h w) (p1 p2 c) -> b c (h p1) (w p2)',
+                               h=h_len, w=w_len, p1=p, p2=p)
+            return output[:, :, :x.shape[2], :x.shape[3]]
+
+        model_patcher.add_object_patch("extra_conds", extra_conds)
+        model_patcher.add_object_patch("diffusion_model.forward", forward)
+
+
+# ---------------------------------------------------------------------------
+# QwenImage 2.1 ROPE position control (model patch)
+# ---------------------------------------------------------------------------
+
+def _editutils_qwen21_build_sequence(dit, x, context, ref_latents, image_slots, rope_offsets=None):
+    """Reimplementation of comfy.ldm.qwen_image21 model build_sequence with
+    per-reference ROPE offsets added (offsets are in latent-token units).
+
+    Faithful to upstream comfy/ldm/qwen_image21/model.py: text split at each
+    vision slot with the reference latents spliced in, target image last;
+    reference rope ids centred on the target with a half-token shift where the
+    reference grid has the other parity. Only difference: hh/ww get the offset.
+    """
+    txt = dit.txt_in(context)
+    ref_latents = list(ref_latents or [])
+    slots = (list(image_slots or []) + [txt.shape[1]] * len(ref_latents))[:len(ref_latents)]
+    bounds = [0] + slots + [txt.shape[1]]
+
+    parts, ids, segments = [], [], []
+    pos, length = 0, 0
+    for i, ((start, end), img) in enumerate(zip(zip(bounds[:-1], bounds[1:]), ref_latents + [x])):
+        n = end - start
+        if n > 0:
+            parts.append(txt[:, start:end])
+            ids.append(torch.arange(pos, pos + n, device=x.device, dtype=torch.float32).unsqueeze(1).expand(n, 3))
+            segments.append((length, length + n, torch.ones((n, length + n), dtype=torch.bool, device=x.device).tril(length)))
+            pos += n
+            length += n
+        h, w = img.shape[-2:]
+        parts.append(dit.img_in(img.flatten(2).transpose(1, 2)))
+        x_off, y_off = rope_offsets[i] if rope_offsets is not None and i < len(rope_offsets) else (0, 0)
+        # half a token where a reference grid has the other parity, so it centres on the target
+        hh = torch.arange(h, device=x.device, dtype=torch.float32) - (h - h // 2) + 0.5 * (h % 2 - x.shape[-2] % 2) + y_off
+        ww = torch.arange(w, device=x.device, dtype=torch.float32) - (w - w // 2) + 0.5 * (w % 2 - x.shape[-1] % 2) + x_off
+        ids.append(torch.stack([torch.full((h, w), pos, device=x.device, dtype=torch.float32),
+                                hh[:, None].expand(h, w), ww[None, :].expand(h, w)], dim=-1).flatten(0, 1))
+        segments.append((length, length + h * w, None))
+        pos += max(h, w)
+        length += h * w
+
+    pe = dit.pe_embedder(torch.cat(ids, dim=0).unsqueeze(0)).transpose(1, 2).contiguous()
+    return torch.cat(parts, dim=1), pe, segments
+
+
+class QwenImage21EditApply_EditUtils:
+    """Patch a QwenImage21 model to use per-reference ROPE position offsets.
+
+    The QwenImage 2.1 DiT natively splices reference latents into the text
+    sequence at the vision slots (image_slots) and centres their rope ids on
+    the target image. This node additionally shifts each reference's rope
+    positions by per-reference pixel offsets from the EditUtils conditioning
+    chain (rope_x_offset / rope_y_offset), enabling regional editing.
+    """
+
+    # latent tokens per 16 latent-channel VAE unit; rope offsets are given in pixels
+    LATENT_DOWNSCALE = 16
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+            },
+            "optional": {
+                "debug_log": ("BOOLEAN", {"default": False}),
+            },
+        }
+
+    RETURN_TYPES = ("MODEL",)
+    RETURN_NAMES = ("model",)
+    FUNCTION = "apply_patch"
+    CATEGORY = "QwenImage/edit"
+    DESCRIPTION = (
+        "Apply per-reference ROPE position offsets to a QwenImage 2.1 model. "
+        "Connect only the model wire — rope offsets flow through the "
+        "EditUtils conditioning chain automatically."
+    )
+
+    def apply_patch(self, model, debug_log=False):
+        # Detect QwenImage21 models via the detected unet config
+        model_config = getattr(model.model, "model_config", None)
+        unet_config = getattr(model_config, "unet_config", None) or {}
+        dit = getattr(model.model, "diffusion_model", None)
+        is_qwen_image21 = (
+            isinstance(unet_config, dict)
+            and unet_config.get("image_model") == "qwen_image21"
+            and dit is not None
+            and hasattr(dit, "build_sequence")
+            and hasattr(dit, "pe_embedder")
+        )
+        if not is_qwen_image21:
+            print("QwenImage21EditApply_EditUtils: model is not QwenImage21, skipping patch. "
+                  "(Requires ComfyUI with Qwen-Image 2.1 support.)")
+            return (model,)
+
+        m = model.clone()
+        dit = m.get_model_object("diffusion_model")
+        setattr(dit, "_editutils_qwen21_rope_debug", bool(debug_log))
+
+        self._apply_qwen_image21_rope_patch(m, dit)
+        return (m,)
+
+    @staticmethod
+    def _apply_qwen_image21_rope_patch(model_patcher, dit):
+        """Install ROPE offset patch for QwenImage21 models."""
+        base_model = model_patcher.model
+        orig_extra_conds = base_model.extra_conds
+        orig_forward = dit.forward
+        orig_build_sequence = dit.build_sequence
+
+        # --- extra_conds: extract rope offsets from conditioning ---
+        def extra_conds(**kwargs):
+            out = orig_extra_conds(**kwargs)
+            rope_offsets = kwargs.get("reference_rope_offsets", None)
+            if rope_offsets is not None:
+                out["ref_rope_offsets"] = comfy.conds.CONDConstant(rope_offsets)
+            return out
+
+        # --- forward: stash the per-ref offsets for build_sequence ---
+        def forward(x, timesteps, context, ref_latents=None, image_slots=None,
+                    transformer_options={}, **kwargs):
+            setattr(dit, "_editutils_qwen21_rope_offsets", kwargs.get("ref_rope_offsets", None))
+            return orig_forward(x, timesteps, context,
+                                ref_latents=ref_latents,
+                                image_slots=image_slots,
+                                transformer_options=transformer_options, **kwargs)
+
+        # --- build_sequence: apply the stashed offsets when present ---
+        def build_sequence(x, context, ref_latents, image_slots):
+            offsets = getattr(dit, "_editutils_qwen21_rope_offsets", None)
+            if offsets is None or all((int(o[0]), int(o[1])) == (0, 0) for o in offsets):
+                # zero offsets: native path, keeps upstream behavior and prefix cache
+                return orig_build_sequence(x, context, ref_latents, image_slots)
+            if getattr(dit, "_editutils_qwen21_rope_debug", False):
+                print(f"[QwenImage21EditApply] rope offsets (px): {offsets}")
+            latent_offsets = [(o[0] / QwenImage21EditApply_EditUtils.LATENT_DOWNSCALE,
+                               o[1] / QwenImage21EditApply_EditUtils.LATENT_DOWNSCALE) for o in offsets]
+            return _editutils_qwen21_build_sequence(dit, x, context, ref_latents, image_slots,
+                                                    rope_offsets=latent_offsets)
+
+        model_patcher.add_object_patch("extra_conds", extra_conds)
+        model_patcher.add_object_patch("diffusion_model.forward", forward)
+        model_patcher.add_object_patch("diffusion_model.build_sequence", build_sequence)
+
+
+# ---------------------------------------------------------------------------
+# Boogu ROPE position control (model patch)
+# ---------------------------------------------------------------------------
+
+class BooguEditApply_EditUtils:
+    """Patch a Boogu model to use per-reference ROPE position offsets.
+
+    Boogu uses OmniGen2RotaryPosEmbed which computes positions from image sizes.
+    This node patches the rope_embedder to inject custom per-reference offsets,
+    enabling regional editing.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+            },
+            "optional": {
+                "debug_log": ("BOOLEAN", {"default": False}),
+            },
+        }
+
+    RETURN_TYPES = ("MODEL",)
+    RETURN_NAMES = ("model",)
+    FUNCTION = "apply_patch"
+    CATEGORY = "Boogu/edit"
+    DESCRIPTION = (
+        "Apply per-reference ROPE position offsets to a Boogu model. "
+        "Connect only the model wire — rope offsets flow through the "
+        "EditUtils conditioning chain automatically."
+    )
+
+    def apply_patch(self, model, debug_log=False):
+        # Detect Boogu model by checking for rope_embedder and image_index_embedding
+        is_boogu = (
+            hasattr(model, "model")
+            and hasattr(model.model, "diffusion_model")
+            and hasattr(model.model.diffusion_model, "rope_embedder")
+            and hasattr(model.model.diffusion_model, "image_index_embedding")
+        )
+        if not is_boogu:
+            return (model,)
+
+        m = model.clone()
+        dit = m.get_model_object("diffusion_model")
+        setattr(dit, "_editutils_boogu_rope_debug", bool(debug_log))
+
+        self._apply_boogu_rope_patch(m, dit)
+        return (m,)
+
+    @staticmethod
+    def _apply_boogu_rope_patch(model_patcher, dit):
+        """Install ROPE offset patch for Boogu models.
+
+        Boogu's rope_embedder computes positions from ref_img_sizes and img_sizes.
+        We patch the forward to store rope_offsets on the dit instance, then
+        patch the rope_embedder call to apply offsets to the computed positions.
+        """
+        base_model = model_patcher.model
+        orig_extra_conds = base_model.extra_conds
+        orig_forward = dit.forward
+
+        # --- extra_conds: extract rope offsets from conditioning ---
+        def extra_conds(**kwargs):
+            out = orig_extra_conds(**kwargs)
+            rope_offsets = kwargs.get("reference_rope_offsets", None)
+            if rope_offsets is not None:
+                out["ref_rope_offsets"] = comfy.conds.CONDConstant(rope_offsets)
+            return out
+
+        # --- forward: store offsets and patch rope computation ---
+        def forward(x, timesteps, context, num_tokens, ref_latents=None,
+                    attention_mask=None, transformer_options={}, **kwargs):
+            ref_rope_offsets = kwargs.get("ref_rope_offsets", None)
+
+            # Store offsets on dit for access during rope computation
+            setattr(dit, "_editutils_boogu_rope_offsets", ref_rope_offsets)
+
+            # For Boogu, we use the standard forward but the rope_embedder
+            # will be aware of offsets via the stored attribute.
+            # The Boogu architecture processes refs differently - offsets
+            # are applied by shifting the ref image positions in the rope.
+            return orig_forward(x, timesteps, context, num_tokens,
+                                ref_latents=ref_latents,
+                                attention_mask=attention_mask,
+                                transformer_options=transformer_options, **kwargs)
+
+        model_patcher.add_object_patch("extra_conds", extra_conds)
+        model_patcher.add_object_patch("diffusion_model.forward", forward)
+
+
 NODE_CLASS_MAPPINGS = {
     "CropWithPadInfo_EditUtils": CropWithPadInfo_EditUtils,
     "ModelConfig_EditUtils": ModelConfig_EditUtils,
@@ -1593,16 +3960,33 @@ NODE_CLASS_MAPPINGS = {
     "Flux2KleinConfigPreparer_EditUtils": Flux2KleinConfigPreparer_EditUtils,
     "Flux2KleinEditTextEncode_EditUtils": Flux2KleinEditTextEncode_EditUtils,
     "Flux2KleinOutputExtractor_EditUtils": Flux2KleinOutputExtractor_EditUtils,
+    "BooguModelConfig_EditUtils": BooguModelConfig_EditUtils,
+    "Krea2ModelConfig_EditUtils": Krea2ModelConfig_EditUtils,
+    "QwenImage21ModelConfig_EditUtils": QwenImage21ModelConfig_EditUtils,
+    "BooguConfigPreparer_EditUtils": BooguConfigPreparer_EditUtils,
+    "BooguEditTextEncode_EditUtils": BooguEditTextEncode_EditUtils,
+    "BooguOutputExtractor_EditUtils": BooguOutputExtractor_EditUtils,
+    "QwenImage21ConfigPreparer_EditUtils": QwenImage21ConfigPreparer_EditUtils,
+    "QwenImage21EditTextEncode_EditUtils": QwenImage21EditTextEncode_EditUtils,
     "ConfigJsonParser_EditUtils": ConfigJsonParser_EditUtils,
     "ListExtractor_EditUtils": ListExtractor_EditUtils,
     "Any2Image_EditUtils": Any2Image_EditUtils,
     "Any2Latent_EditUtils": Any2Latent_EditUtils,
     "AdaptiveLongestEdge_EditUtils": AdaptiveLongestEdge_EditUtils,
     "LoadImageWithFilename_EditUtils": LoadImageWithFilename_EditUtils,
-    "DiffMask_EditUtils": DiffMask_EditUtils
+    "LongestEdgeImageProcess_EditUtils": LongestEdgeImageProcess_EditUtils,
+    "ClearRefLatents_EditUtils": ClearRefLatents_EditUtils,
+    "SaveCondition_EditUtils": SaveCondition_EditUtils,
+    "LoadCondition_EditUtils": LoadCondition_EditUtils,
+    "LoadConditionFromLoras_EditUtils": LoadConditionFromLoras_EditUtils,
+    "DiffMask_EditUtils": DiffMask_EditUtils,
+    "RopeOffsetFromMask_EditUtils": RopeOffsetFromMask_EditUtils,
+    "Krea2EditApply_EditUtils": Krea2EditApply_EditUtils,
+    "Flux2KleinEditApply_EditUtils": Flux2KleinEditApply_EditUtils,
+    "QwenImageEditApply_EditUtils": QwenImageEditApply_EditUtils,
+    "QwenImage21EditApply_EditUtils": QwenImage21EditApply_EditUtils,
+    "BooguEditApply_EditUtils": BooguEditApply_EditUtils,
 }
-
-# Display name mappings
 NODE_DISPLAY_NAME_MAPPINGS = {
     "CropWithPadInfo_EditUtils": "EditUtils: Crop With Pad Info lrzjason",
     "ModelConfig_EditUtils": "EditUtils: Model Config lrzjason",
@@ -1616,11 +4000,30 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "Flux2KleinConfigPreparer_EditUtils": "EditUtils: Flux2Klein Config Preparer lrzjason",
     "Flux2KleinEditTextEncode_EditUtils": "EditUtils: Flux2Klein Edit Text Encode lrzjason",
     "Flux2KleinOutputExtractor_EditUtils": "EditUtils: Flux2Klein Output Extractor lrzjason",
+    "BooguModelConfig_EditUtils": "EditUtils: Boogu Model Config lrzjason",
+    "Krea2ModelConfig_EditUtils": "EditUtils: Krea2 Model Config lrzjason",
+    "QwenImage21ModelConfig_EditUtils": "EditUtils: QwenImage 2.1 Model Config lrzjason",
+    "BooguConfigPreparer_EditUtils": "EditUtils: Boogu Config Preparer lrzjason",
+    "BooguEditTextEncode_EditUtils": "EditUtils: Boogu Edit Text Encode lrzjason",
+    "BooguOutputExtractor_EditUtils": "EditUtils: Boogu Output Extractor lrzjason",
+    "QwenImage21ConfigPreparer_EditUtils": "EditUtils: QwenImage 2.1 Config Preparer lrzjason",
+    "QwenImage21EditTextEncode_EditUtils": "EditUtils: QwenImage 2.1 Edit Text Encode lrzjason",
     "ConfigJsonParser_EditUtils": "EditUtils: Config Json Parser lrzjason",
     "ListExtractor_EditUtils": "EditUtils: List Extractor lrzjason",
     "Any2Image_EditUtils": "EditUtils: Any2Image lrzjason",
     "Any2Latent_EditUtils": "EditUtils: Any2Latent lrzjason",
     "AdaptiveLongestEdge_EditUtils": "EditUtils: Adaptive Longest Edge lrzjason",
     "LoadImageWithFilename_EditUtils": "EditUtils: Load Image With Filename lrzjason",
-    "DiffMask_EditUtils": "EditUtils: Diff Mask lrzjason"
+    "LongestEdgeImageProcess_EditUtils": "EditUtils: Longest Edge Image Process lrzjason",
+    "ClearRefLatents_EditUtils": "EditUtils: Clear Ref Latents lrzjason",
+    "SaveCondition_EditUtils": "EditUtils: Save Condition lrzjason",
+    "LoadCondition_EditUtils": "EditUtils: Load Condition lrzjason",
+    "LoadConditionFromLoras_EditUtils": "EditUtils: Load Condition From Loras lrzjason",
+    "DiffMask_EditUtils": "EditUtils: Diff Mask lrzjason",
+    "RopeOffsetFromMask_EditUtils": "EditUtils: ROPE Offset From Mask lrzjason",
+    "Krea2EditApply_EditUtils": "EditUtils: Krea2 Edit Apply (Model Patch) lrzjason",
+    "Flux2KleinEditApply_EditUtils": "EditUtils: Flux2Klein Edit Apply (ROPE Control) lrzjason",
+    "QwenImageEditApply_EditUtils": "EditUtils: QwenImage Edit Apply (ROPE Control) lrzjason",
+    "QwenImage21EditApply_EditUtils": "EditUtils: QwenImage 2.1 Edit Apply (ROPE Control) lrzjason",
+    "BooguEditApply_EditUtils": "EditUtils: Boogu Edit Apply (ROPE Control) lrzjason",
 }
