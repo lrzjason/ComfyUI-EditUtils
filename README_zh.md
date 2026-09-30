@@ -34,7 +34,7 @@ https://www.runninghub.ai/post/2082077636234313729/?inviteCode=rh-v1279
 EditUtils 支持 **Qwen-Image 2.1** 编辑：简易路径最多 3 张参考图，通过配置链可支持无限张。Qwen-Image 2.1 与 Qwen-Image 1.0 的工作方式不同，qwen21 系列节点已经为你处理好这些差异：
 
 - **Qwen3-VL 文本编码器**：提示词与参考图一起编码；每张参考图的潜变量会在编码器的 vision slot（`image_slots`）处拼接进文本序列 —— 不再需要 `Picture n:` 这类提示词前缀。
-- **全新 VAE**：64 通道潜变量，空间下采样 16x（支持 RGBA）。参考图对齐到 **32 像素的倍数**，因此每个 vision slot 恰好对应 2x2 个潜变量 token。
+- **全新 VAE**：64 通道潜变量，空间下采样 16x（支持 RGBA）。参考图对齐到 **16 像素的倍数**（与 VAE 下采样倍数一致）。
 - **统一的参考图缩放**：视觉塔（vision tower）与 VAE 使用**同一张**缩放后的图像（编码器用白底合成后的 RGB，VAE 用完整 RGBA），因此不再有单独的 `vl_target_size` 流程。
 
 ![Qwen-Image 2.1 编辑示例](qwen%20image%2021%20example.png)
@@ -45,8 +45,8 @@ EditUtils 支持 **Qwen-Image 2.1** 编辑：简易路径最多 3 张参考图�
 
 | 节点 | 用途 |
 |---|---|
-| `QwenImage21ModelConfig_EditUtils` | 模型配置（`qwen_image21` 路径，`vae_unit=32`）。instruction 留空 = 使用内置 T2I 模板；填写自定义 instruction = 使用自定义系统提示词。 |
-| `QwenImage21ConfigPreparer_EditUtils` | 单张图片的配置：`to_ref`、`ref_main_image`、`ref_longest_edge`（按 32 对齐）、`ref_crop`、`mask`、`rope_x_offset / rope_y_offset`。多张参考图时串联多个该节点。 |
+| `QwenImage21ModelConfig_EditUtils` | 模型配置（`qwen_image21` 路径，`vae_unit=16`）。instruction 留空 = 使用内置 T2I 模板；填写自定义 instruction = 使用自定义系统提示词。 |
+| `QwenImage21ConfigPreparer_EditUtils` | 单张图片的配置：`to_ref`、`ref_main_image`、`ref_longest_edge`（按 16 对齐）、`ref_crop`、`mask`、`rope_x_offset / rope_y_offset`。多张参考图时串联多个该节点。 |
 | `QwenImage21EditTextEncode_EditUtils` | 单节点简易路径（image1–3），输出与 `EditTextEncode_EditUtils` 相同。 |
 | `QwenImage21EditApply_EditUtils` | 可选的模型补丁，启用按参考图独立的 ROPE 偏移（区域编辑）。只需连接 model 线 —— 偏移量通过 conditioning 链路传递。 |
 
@@ -75,7 +75,7 @@ QwenImage21ModelConfig ──────────────────┴
 示例工作流位于 [workflows](workflows/) 目录：
 
 - **[edit utils qwen image 2.1 example.json](workflows/edit%20utils%20qwen%20image%202.1%20example.json)** - Qwen-Image 2.1 编辑工作流（单张参考图）。使用 `UNETLoader` + `CLIPLoader`（type 选 `qwen_image`）+ `VAELoader` 加载模型，然后接线 `LoadImage → QwenImage21ConfigPreparer_EditUtils → EditTextEncode_EditUtils ← QwenImage21ModelConfig_EditUtils → KSampler → VAEDecode → CropWithPadInfo_EditUtils`，用于去掉主图的填充。
-  - 参考图潜变量在 vision slot（`image_slots`）处拼接进文本序列；2.1 VAE 为 64 通道、16x 空间下采样，因此参考图按 32 像素倍数对齐。
+  - 参考图潜变量在 vision slot（`image_slots`）处拼接进文本序列；2.1 VAE 为 64 通道、16x 空间下采样，因此参考图按 16 像素倍数对齐。
   - Config Preparer 上的 `rope_x_offset / rope_y_offset` 在该模型被 `QwenImage21EditApply_EditUtils` 打补丁后，可平移参考图在画布上的位置（区域编辑）—— 示例工作流未包含该节点。
   - 示例中的采样设置：`euler / simple`，25 步，CFG 1.0。需要 ComfyUI 已支持上游的 Qwen-Image 2.1。
 - **[Simple Krea2 Depth.json](workflows/Simple%20Krea2%20Depth.json)** - 配合 depth LoRA 的简单 Krea2 编辑工作流。接线 `LoadImage → Krea2ModelConfig_EditUtils → EditTextEncode_EditUtils → Krea2EditApply_EditUtils → KSampler`，通过 `UNETLoader + LoraLoaderModelOnly` 加载模型 —— 参考图潜变量会自动沿 conditioning 链路传递。
@@ -93,15 +93,16 @@ QwenImage21ModelConfig ──────────────────┴
 
 ## 填充边缘控制（Pad Edge Control）
 
-当 `ref_crop` 设为 `pad` 时，图像会被填充到 VAE 单元尺寸的整数倍。填充区域的外观现在可以按图配置，通过配置节点上的 `pad_mode`、`pad_color`、`pad_noise`（`QwenConfigPreparer_EditUtils` / `QwenImage21ConfigPreparer_EditUtils` / `Flux2KleinConfigPreparer_EditUtils`）、`ConfigJsonParser_EditUtils` 的 JSON，或独立的 `LongestEdgeImageProcess_EditUtils` 节点设置：
+当 `ref_crop` 设为 `pad` 时，图像会被填充到 VAE 单元尺寸的整数倍。填充区域的外观现在可以按图配置，通过配置节点上的 `pad_mode`、`pad_color`、`pad_color_rgb`、`pad_noise`（`QwenConfigPreparer_EditUtils` / `QwenImage21ConfigPreparer_EditUtils` / `Flux2KleinConfigPreparer_EditUtils`）、`ConfigJsonParser_EditUtils` 的 JSON，或独立的 `LongestEdgeImageProcess_EditUtils` 节点设置：
 
 - **pad_mode**（默认：`color`）：
   - `color`：用 `pad_color` 纯色填充
   - `edge`：复制最外侧一行／一列像素
   - `mirror`：在边界处镜像内容
   - `border_mean`：用最近 8 个边缘像素的均值填充每一侧
-- **pad_color**（默认：Qwen 1.0 与 Qwen-Image 2.1 为 `white`；Flux2Klein 与独立的 `LongestEdgeImageProcess_EditUtils` 为 `black`）：支持颜色名（`black`、`white`、`gray`、`mid_gray`）、十六进制 `#RRGGBB` 或 `"r,g,b"`；任一数值大于 1 时按 0–255 处理。
-- **pad_noise**（默认：`0.0`）：为填充区域加入高斯抖动（标准差），用于打散纯平区域，配合纯色填充推荐 0.02–0.05。
+- **pad_color**（默认：Qwen 1.0 与 Qwen-Image 2.1 为 `white`；Flux2Klein 与独立的 `LongestEdgeImageProcess_EditUtils` 为 `black`）：下拉选项 `red`、`green`、`blue`、`white`、`black`、`custom`。
+- **pad_color_rgb**（默认：`-`）：可选覆盖项，**6 位 hex 颜色，`#` 可有可无**（例如 `FF0000` 或 `#FF0000`）。只要是合法 hex 就会覆盖 `pad_color`（无论下拉选了什么）；其它值（`-`、长度不对、含非 hex 字符、纯数字、`r,g,b`）一律无效、不生效，以下拉选项为准。`custom` 本身不带颜色，hex 无效时回退到该模型默认色。
+- **pad_noise**（默认：`0.0`）：**只**给填充区域加高斯抖动（标准差），图像内容完全不受影响；配合纯色填充推荐 0.02–0.05。
 
 **为什么需要它：** Qwen 系列（1.0 与 Image 2.1）训练时使用黑边填充，因此黑色填充在生成时容易被放大成大片黑边。两条 Qwen 路径默认都改为白色填充。如果纯色仍不够，`border_mean` 或 `mirror` 是内容自适应的替代方案，且任何模式配合少量 `pad_noise` 都会更稳。
 
@@ -135,8 +136,9 @@ QwenImage21ModelConfig ──────────────────┴
 - `ref_upscale`：放大方式（默认："lanczos"）
 - `vae_unit`：用于填充对齐的 VAE 单元大小（默认：8）
 - `pad_mode`（可选）：填充方式 - "color"、"edge"、"mirror" 或 "border_mean"（默认："color"）
-- `pad_color`（可选）：`pad_mode="color"` 时的填充色（默认："black"；Qwen 系模型建议改为 "white"）
-- `pad_noise`（可选）：填充区域的高斯抖动标准差（默认：0.0，可试 0.02–0.05）
+- `pad_color`（可选）：下拉选项 - "red"、"green"、"blue"、"white"、"black" 或 "custom"（默认："black"；Qwen 系模型建议改为 "white"）
+- `pad_color_rgb`（可选）：覆盖色，6 位 hex，"#" 可有可无（如 "FF0000" 或 "#FF0000"），合法时覆盖 `pad_color`（默认："-" 表示不生效）
+- `pad_noise`（可选）：只加到填充区域的高斯抖动标准差（默认：0.0，可试 0.02–0.05）
 
 **输出：**
 - `processed_image`：缩放/填充后的图像
