@@ -82,14 +82,14 @@ Krea2 管线专用配置。固定返回 `{"model_name": "qwen", "vae_unit": 8, "
 ### QwenImage21ModelConfig_EditUtils
 
 **显示名**：EditUtils: QwenImage 2.1 Model Config lrzjason
-Qwen-Image 2.1 专用配置：固定 `model_name="qwen_image21"`、`vae_unit=32`、`llama_template=""`。
+Qwen-Image 2.1 专用配置：固定 `model_name="qwen_image21"`、`vae_unit=16`、`llama_template=""`。
 
 | 输入 | 类型 | 默认 | 说明 |
 |---|---|---|---|
 | instruction | STRING (optional, multiline) | `""` | 留空时 `llama_template=""`（推荐，tokenizer 自动构造 “Comprehend and analyze the provided prompt.” 模板）；非空时构造自定义 system prompt 模板（编码时自动在 `{}` 处插入 vision block） |
 
 - 输出：`model_config` (DICT)。
-- **为什么 vae_unit=32**：Qwen-Image 2.1 的 VAE 是 64 通道、16 倍空间下采样；vision slot 与 2x2 latent 组一一对应，因此参考图要对齐到 32 像素倍数（16×2）。
+- **为什么 vae_unit=16**：Qwen-Image 2.1 的 VAE 是 64 通道、16 倍空间下采样，因此参考图要对齐到 16 像素倍数（`QwenImage21EditApply_EditUtils` 内部同样按 16 像素 / latent token 换算 rope 偏移）。
 - 与 Qwen（1.0）不同：VL 视觉塔输入就是缩放后的参考图本身（无独立 vl 缩放管线）；ref latent 会被拼接进文本序列的 vision slot（`image_slots`）。
 - 需要已支持 Qwen-Image 2.1 的 ComfyUI（上游 `qwen_image21` 支持）才能加载模型。
 
@@ -113,7 +113,7 @@ Qwen-Image 2.1 专用配置：固定 `model_name="qwen_image21"`、`vae_unit=32`
 - 输出：`conditioning` (CONDITIONING) · `latent` (LATENT) · `custom_output` (ANY dict) · `main_image` (IMAGE) · `mask` (MASK) · `pad_info` (ANY dict)。
 
 **Qwen / Flux2Klein 路径行为**
-- 对每张 `to_ref` 的图：按 `ref_longest_edge` + `ref_resize_mode` 缩放，按 `vae_unit` 对齐，`ref_crop="pad"` 时黑边补齐到 vae_unit 倍数（主图生成 `pad_info`），然后 `vae.encode` 得到 ref latent。
+- 对每张 `to_ref` 的图：按 `ref_longest_edge` + `ref_resize_mode` 缩放，按 `vae_unit` 对齐，`ref_crop="pad"` 时补齐到 vae_unit 倍数（主图生成 `pad_info`），然后 `vae.encode` 得到 ref latent。补齐区域的填充方式由 config 的 `pad_mode` / `pad_color` / `pad_color_rgb` / `pad_noise` 控制（qwen 系默认白边，flux2klein 默认黑边）。
 - 全部 ref latents 以 `reference_latents` 键挂到 conditioning 上（`node_helpers.conditioning_set_values`），采样模型据此读取。**这就是 EditUtils 条件链。**
 - `latent` 输出 = 主图（`ref_main_image`）的 ref latent；无图时为 1×4×128×128 零 latent（qwen_image21 为 1×64×128×128）。
 - Qwen 的 `to_vl` 图还会缩放到 `vl_target_size` 面积喂给 QwenVL，并在 prompt 前自动拼 `Picture n: <|vision_start|>...`；Flux2Klein 忽略 VL（代码中 `to_vl` 强制 False）。
@@ -121,7 +121,7 @@ Qwen-Image 2.1 专用配置：固定 `model_name="qwen_image21"`、`vae_unit=32`
 - 只会有一个主图：后续 config 的 `ref_main_image` 会被强制改为 False；都不设主图时自动取第 0 张并打印提示。
 
 **QwenImage21 路径行为**（`model_name="qwen_image21"`）
-- 每张 `to_ref` 的图按 `ref_longest_edge` + `ref_resize_mode` 缩放并对齐到 **32 像素倍数**（`vae_unit=32`：16 倍 VAE × 2，保证每个 vision slot 对应 2x2 latent 组）。
+- 每张 `to_ref` 的图按 `ref_longest_edge` + `ref_resize_mode` 缩放并对齐到 **16 像素倍数**（`vae_unit=16`，即 16 倍 VAE 下采样）。
 - **VL 输入 = 缩放后的参考图本身**（无独立 vl 缩放/裁剪管线）：RGB 通道做白底 alpha 合成喂 Qwen3-VL 文本编码器，完整 RGBA（RGB 输入由 ComfyUI 自动补不透明 alpha）交给 VAE 编码。
 - token 化时不拼 `Picture n:` 前缀：`llama_template` 为空时由 QwenImage21 tokenizer 自动构造 T2I 模板并插入 `<image n><|vision_start|>...`；自定义模板时在 `{}` 处自动插入 vision block。
 - 无 ref latent（纯文本/to_vl only）时 `keep_vision=True`，vision embedding 作为纯文本条件保留；有 ref latent 时不传 vision token、由文本编码器记录 `image_slots`（vision slot 在文本序列中的位置）， DiT 在这些位置拼接参考 latent。
@@ -162,10 +162,10 @@ Qwen-Image 2.1 简易一体化编码节点（内部构造固定 config 后调用
 | vae | VAE | — | Qwen-Image 2.1 VAE（64 通道，16 倍下采样） |
 | prompt | STRING (multiline) | — | 编辑指令 |
 | image1/2/3 | IMAGE (optional) | None | 至少接 image1，否则报错 |
-| ref_longest_edge | INT (32–4096, step 32) | 1024 | 参考目标尺寸（自动对齐 32 像素倍数） |
+| ref_longest_edge | INT (16–4096, step 16) | 1024 | 参考目标尺寸（自动对齐 16 像素倍数） |
 | mask | MASK (optional) | None | 仅作用于 image1 |
 
-- 内部固定参数：`ref_crop="pad"`、`ref_upscale="lanczos"`、`to_vl=True`、`vae_unit=32`、`llama_template=""`（自动 T2I 模板）、image1 为主图。
+- 内部固定参数：`ref_crop="pad"`、`ref_upscale="lanczos"`、`to_vl=True`、`vae_unit=16`、`llama_template=""`（自动 T2I 模板）、image1 为主图。
 - 输出：`conditioning` / `latent` / `custom_output` / `main_image` / `mask`。
 - 需要已支持 Qwen-Image 2.1 的 ComfyUI。
 
@@ -222,7 +222,7 @@ Boogu 简易一体化编码节点，直接输出正负双条件。
 | to_ref | BOOLEAN | True | 是否进参考 latent |
 | ref_main_image | BOOLEAN | True | 是否主图（其 latent 作为采样初始 latent，并生成 pad_info） |
 | ref_longest_edge | INT (8–4096) | 1024 | |
-| ref_crop | COMBO: `pad`/`center`/`disabled` | `pad` | pad=黑边补齐到 vae_unit 倍数 |
+| ref_crop | COMBO: `pad`/`center`/`disabled` | `pad` | pad=补齐到 vae_unit 倍数（填充方式见 pad_mode/pad_color/pad_color_rgb） |
 | ref_upscale | COMBO: `lanczos`/`bicubic`/`area` | `lanczos` | |
 | to_vl | BOOLEAN | True | 是否进 QwenVL 编码 |
 | vl_resize | BOOLEAN | True | VL 前是否缩放 |
@@ -231,6 +231,10 @@ Boogu 简易一体化编码节点，直接输出正负双条件。
 | vl_upscale | COMBO: `lanczos`/`bicubic`/`area` | `lanczos` | |
 | mask | MASK (optional) | None | |
 | ref_resize_mode | COMBO: `longest_edge`/`area` | `longest_edge` | longest_edge=最长边对齐；area=总面积对齐 ref_longest_edge² |
+| pad_mode | COMBO: `color`/`edge`/`mirror`/`border_mean` | `color` | ref_crop=pad 时填充区域的生成方式 |
+| pad_color | COMBO: `red`/`green`/`blue`/`white`/`black`/`custom` | `white` | pad_mode=color 时的填充色。qwen 默认白色：黑边会在生成时被放大 |
+| pad_color_rgb | STRING | `-` | 可选覆盖：6 位 hex，`#` 可有可无（如 `FF0000` 或 `#FF0000`）。合法时覆盖 pad_color；`-`/长度不对/非 hex 等无效值不生效 |
+| pad_noise | FLOAT (0–0.2) | 0.0 | **只**加到填充区域的高斯抖动（std），图像内容不受影响；0.02–0.05 可打散纯平区域 |
 
 - 输出：`configs` (LIST) · `config` (ANY，当前图的配置)。
 
@@ -245,13 +249,17 @@ Qwen-Image 2.1 每图配置。**无独立 VL 参数**（VL 输入就是缩放后
 | configs | LIST (optional) | None | 上游 configs 链 |
 | to_ref | BOOLEAN | True | 是否进参考 latent |
 | ref_main_image | BOOLEAN | True | 是否主图 |
-| ref_longest_edge | INT (32–4096, step 32) | 1024 | 对齐到 32 像素倍数（vision slot ↔ 2x2 latent 组） |
+| ref_longest_edge | INT (16–4096, step 16) | 1024 | 对齐到 16 像素倍数（16 倍 VAE 下采样） |
 | ref_crop | COMBO: `pad`/`center`/`disabled` | `pad` | |
 | ref_upscale | COMBO | `lanczos` | |
 | to_vl | BOOLEAN | True | 是否把缩放后的参考图喂给 Qwen3-VL 并在其 vision slot 拼接 latent。**建议保持开启**（关闭走未训练路径） |
 | mask | MASK (optional) | None | |
 | ref_resize_mode | COMBO: `longest_edge`/`area` | `longest_edge` | |
-| rope_x_offset / rope_y_offset | INT (0–4096, step 8) | 0 | ROPE 位置偏移（像素，32 对齐）；需配合 `QwenImage21EditApply_EditUtils` |
+| rope_x_offset / rope_y_offset | INT (0–4096, step 16) | 0 | ROPE 位置偏移（像素，16 对齐）；需配合 `QwenImage21EditApply_EditUtils` |
+| pad_mode | COMBO: `color`/`edge`/`mirror`/`border_mean` | `color` | ref_crop=pad 时填充区域的生成方式 |
+| pad_color | COMBO: `red`/`green`/`blue`/`white`/`black`/`custom` | `white` | pad_mode=color 时的填充色。2.1 默认白色：模型用黑边训练，黑边会在生成时被放大 |
+| pad_color_rgb | STRING | `-` | 可选覆盖：6 位 hex，`#` 可有可无（如 `FF0000` 或 `#FF0000`）。合法时覆盖 pad_color；无效值不生效 |
+| pad_noise | FLOAT (0–0.2) | 0.0 | **只**加到填充区域的高斯抖动（std），图像内容不受影响；0.02–0.05 可打散纯平区域 |
 
 - 输出：`configs` (LIST) · `config` (ANY)。
 - `to_vl=True` 但 `to_ref=False` 会在编码时被强制改回 `to_ref=True`（并打印提示），否则 vision slot 对不齐。
@@ -296,6 +304,8 @@ Qwen-Image 2.1 每图配置。**无独立 VL 参数**（VL 输入就是缩放后
 | mask | MASK (optional) | None | |
 
 - 内置默认 JSON：`{"to_ref": true, "ref_main_image": false, "ref_longest_edge": 1024, "ref_crop": "center", "ref_upscale": "lanczos", "to_vl": true, "vl_resize": true, "vl_target_size": 384, "vl_crop": "center", "vl_upscale": "bicubic", "mask": null}`（注意这里 ref_main_image 默认 **false**、ref_crop 默认 **center**，与各模型专用 Preparer 不同）。
+- `pad_mode` / `pad_color` / `pad_color_rgb` / `pad_noise` **不写进内置模板**：本节点与模型无关，交由 EditTextEncode 按模型兜底（qwen / qwen_image21 白边，其余黑边）。需要覆盖时在 JSON 里显式加上这些键即可（`pad_color` 取 `red`/`green`/`blue`/`white`/`black`/`custom`，`pad_color_rgb` 为 6 位 hex、`#` 可有可无）。
+- `config_json` 为空或非法 JSON 时，会打印错误并退回内置默认配置（不再抛异常）。
 - 输出：`configs` (LIST) · `config` (ANY)。
 
 ---
@@ -422,6 +432,10 @@ Qwen-Image 2.1 每图配置。**无独立 VL 参数**（VL 输入就是缩放后
 | ref_crop | COMBO: `pad`/`center`/`disabled` | `pad` | |
 | ref_upscale | COMBO: `lanczos`/`bicubic`/`area` | `lanczos` | |
 | vae_unit | INT (8–64, step 8) | 8 | |
+| pad_mode | COMBO: `color`/`edge`/`mirror`/`border_mean` | `color` | ref_crop=pad 时填充区域的生成方式（optional） |
+| pad_color | COMBO: `red`/`green`/`blue`/`white`/`black`/`custom` | `black` | pad_mode=color 时的填充色；qwen 系模型建议改为 white（optional） |
+| pad_color_rgb | STRING | `-` | 可选覆盖：6 位 hex，`#` 可有可无，合法时覆盖 pad_color（optional） |
+| pad_noise | FLOAT (0–0.2) | 0.0 | 只加到填充区域的高斯抖动，内容不受影响（optional） |
 
 - 输出：`processed_image` (IMAGE) · `pad_info` (ANY) · `scale_by` (FLOAT)。
 - `pad_info` 可喂给 `CropWithPadInfo_EditUtils` 还原出图尺寸。
@@ -429,7 +443,7 @@ Qwen-Image 2.1 每图配置。**无独立 VL 参数**（VL 输入就是缩放后
 ### CropWithPadInfo_EditUtils
 
 **显示名**：EditUtils: Crop With Pad Info lrzjason （CATEGORY `image`）
-按 pad_info 裁掉 pad 模式添加的黑边，还原原始内容区域。
+按 pad_info 裁掉 pad 模式添加的填充区域，还原原始内容区域。
 
 | 输入 | 类型 | 默认 | 说明 |
 |---|---|---|---|

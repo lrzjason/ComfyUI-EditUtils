@@ -35,7 +35,7 @@ For better consistency in local editing, it's recommended to use this workflow w
 EditUtils supports **Qwen-Image 2.1** editing with up to 3 references in the simple path (unlimited via the config chain). Qwen-Image 2.1 works differently from Qwen-Image 1.0, and the qwen21 nodes handle the differences for you:
 
 - **Qwen3-VL text encoder**: prompt and reference images are encoded together; each reference latent is spliced into the text sequence at the encoder's vision slots (`image_slots`) — no `Picture n:` prompt prefix needed.
-- **New VAE**: 64-channel latents with 16x spatial downscale (RGBA-aware). References are aligned to **32-pixel multiples** so every vision slot maps onto a 2x2 group of latent tokens.
+- **New VAE**: 64-channel latents with 16x spatial downscale (RGBA-aware). References are aligned to **16-pixel multiples**, matching the VAE downscale.
 - **Unified reference resize**: the vision tower and the VAE consume the *same* resized image (alpha composited over white for the encoder, full RGBA for the VAE), so there is no separate `vl_target_size` pipeline.
 
 ![Qwen-Image 2.1 edit example](qwen%20image%2021%20example.png)
@@ -46,8 +46,8 @@ EditUtils supports **Qwen-Image 2.1** editing with up to 3 references in the sim
 
 | Node | Purpose |
 |---|---|
-| `QwenImage21ModelConfig_EditUtils` | Model config (`qwen_image21` route, `vae_unit=32`). Empty instruction = built-in T2I template; custom instruction = custom system prompt. |
-| `QwenImage21ConfigPreparer_EditUtils` | Per-image config: `to_ref`, `ref_main_image`, `ref_longest_edge` (32-aligned), `ref_crop`, `mask`, `rope_x_offset / rope_y_offset`. Chain multiple nodes for multiple references. |
+| `QwenImage21ModelConfig_EditUtils` | Model config (`qwen_image21` route, `vae_unit=16`). Empty instruction = built-in T2I template; custom instruction = custom system prompt. |
+| `QwenImage21ConfigPreparer_EditUtils` | Per-image config: `to_ref`, `ref_main_image`, `ref_longest_edge` (16-aligned), `ref_crop`, `mask`, `rope_x_offset / rope_y_offset`. Chain multiple nodes for multiple references. |
 | `QwenImage21EditTextEncode_EditUtils` | One-node simple path (image1–3), same outputs as `EditTextEncode_EditUtils`. |
 | `QwenImage21EditApply_EditUtils` | Optional model patch enabling per-reference ROPE offsets (regional editing). Connect only the model wire — offsets flow through the conditioning chain. |
 
@@ -119,7 +119,7 @@ BreastSizeControl ──► QwenConfigPreparer ───────┘         
 Example workflows are available in the [workflows](workflows/) directory:
 
 - **[edit utils qwen image 2.1 example.json](workflows/edit%20utils%20qwen%20image%202.1%20example.json)** - Qwen-Image 2.1 editing workflow (single reference). Loads the model with `UNETLoader` + `CLIPLoader` (type `qwen_image`) + `VAELoader`, then wires `LoadImage → QwenImage21ConfigPreparer_EditUtils → EditTextEncode_EditUtils ← QwenImage21ModelConfig_EditUtils → KSampler → VAEDecode → CropWithPadInfo_EditUtils` to undo the main-image padding.
-  - The reference latent is spliced into the text sequence at the vision slots (`image_slots`); the 2.1 VAE is 64-channel with 16x spatial downscale, so references align to 32-pixel multiples.
+  - The reference latent is spliced into the text sequence at the vision slots (`image_slots`); the 2.1 VAE is 64-channel with 16x spatial downscale, so references align to 16-pixel multiples.
   - `rope_x_offset / rope_y_offset` on the Config Preparer shift a reference's position on the canvas when the model is patched with `QwenImage21EditApply_EditUtils` (regional editing) — the example workflow does not include that node.
   - Sampler settings in the example: `euler / simple`, 25 steps, CFG 1.0. Requires ComfyUI with upstream Qwen-Image 2.1 support.
 - **[Simple Krea2 Depth.json](workflows/Simple%20Krea2%20Depth.json)** - Simple Krea2 editing workflow with a depth LoRA. Wires `LoadImage → Krea2ModelConfig_EditUtils → EditTextEncode_EditUtils → Krea2EditApply_EditUtils → KSampler`, loading the model via `UNETLoader + LoraLoaderModelOnly` — the reference latent flows through the conditioning chain automatically.
@@ -137,6 +137,24 @@ Example workflows are available in the [workflows](workflows/) directory:
   - Single and multiple workflows: unlimited images (connect multiple configs)
 
 
+## Pad Edge Control
+
+When `ref_crop` is set to `pad`, the image is padded to a multiple of the VAE unit size. How that padding looks is now configurable per image through `pad_mode`, `pad_color`, `pad_color_rgb` and `pad_noise` on the config preparer nodes (`QwenConfigPreparer_EditUtils` / `QwenImage21ConfigPreparer_EditUtils` / `Flux2KleinConfigPreparer_EditUtils`), the `ConfigJsonParser_EditUtils` JSON, or the standalone `LongestEdgeImageProcess_EditUtils` node:
+
+- **pad_mode** (default: `color`):
+  - `color`: solid fill using `pad_color`
+  - `edge`: replicate the outermost pixel row/column
+  - `mirror`: reflect the content at the boundary
+  - `border_mean`: fill each side with the mean of its nearest 8 pixels
+- **pad_color** (default: `white` for Qwen and Qwen-Image 2.1, `black` for Flux2Klein and standalone `LongestEdgeImageProcess_EditUtils`): dropdown with `red`, `green`, `blue`, `white`, `black`, `custom`.
+- **pad_color_rgb** (default: `-`): optional override, a **6-digit hex color, `#` optional** (e.g. `FF0000` or `#FF0000`). When it holds a valid hex it overrides `pad_color`, whatever the dropdown says. Anything else (`-`, wrong length, non-hex characters, plain numbers, `r,g,b`) is invalid and has no effect, so the dropdown value applies. `custom` carries no color of its own, so with an invalid hex it falls back to the model default.
+- **pad_noise** (default: `0.0`): Gaussian jitter (std) added **to the padding area only** — the image content is never modified. 0.02-0.05 is recommended with solid colors.
+
+**Why this exists:** Qwen models (1.0 and Image 2.1) were trained with black pads, so black padding tends to get amplified into large black edges during generation. White is therefore the default for both Qwen paths. If a solid color is still not enough, `border_mean` or `mirror` are content-adaptive alternatives, and any mode benefits from a small `pad_noise`.
+
+The mask/semantics of the padded area are unchanged (it is always masked out), and `CropWithPadInfo_EditUtils` still crops the padding away correctly.
+
+
 ## Node Categories
 Documentation:
 
@@ -147,6 +165,7 @@ Documentation:
 
 - **Multi-Model Support**: Works with Qwen, Qwen-Image 2.1, Flux2Klein, Boogu and Krea2 models for versatile image editing
 - **Flexible Configuration**: Per-image configuration options for reference and VL processing
+- **Pad Edge Control**: Configurable pad mode/color/noise (white edge default for Qwen 1.0 and Qwen-Image 2.1) to avoid black edge amplification
 - **Unified Interface**: Single node EditTextEncode_EditUtils works with multiple models through configuration nodes
 - **Advanced Processing**: Supports complex image editing workflows with multiple reference images
 - **Comprehensive Output**: Detailed output dictionary with all processing intermediates
@@ -163,6 +182,10 @@ A utility node that resizes and pads an image based on a target longest edge, us
 - `ref_crop`: Crop method - "pad", "center", or "disabled" (default: "pad")
 - `ref_upscale`: Upscale method (default: "lanczos")
 - `vae_unit`: VAE unit size for padding alignment (default: 8)
+- `pad_mode` (optional): Padding fill mode - "color", "edge", "mirror", or "border_mean" (default: "color")
+- `pad_color` (optional): Dropdown - "red", "green", "blue", "white", "black", or "custom" (default: "black"; use "white" for Qwen models)
+- `pad_color_rgb` (optional): Override as 6-digit hex, "#" optional (e.g. "FF0000" or "#FF0000"); overrides `pad_color` when valid (default: "-" = no effect)
+- `pad_noise` (optional): Gaussian jitter (std) added to the padding only (default: 0.0, try 0.02-0.05)
 
 **Outputs:**
 - `processed_image`: The resized/padded image
