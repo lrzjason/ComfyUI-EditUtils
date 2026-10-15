@@ -1,8 +1,8 @@
 # EditUtils 节点参考文档
 
-> 本文档以 `nodes.py` 当前代码（`NODE_CLASS_MAPPINGS`，39 个节点）为准。
-> 显示名均带 `lrzjason` 后缀；节点菜单分类多为 `advanced/conditioning`，图像类节点在 `image`，模型补丁在 `Krea2/edit` / `QwenImage/edit`。
-> 前端脚本在 `web/js/`（`WEB_DIRECTORY = "./web"`）：`BreastSizeControl_EditUtils` 的画布编辑器。
+> 本文档以 `nodes.py` 当前代码（`NODE_CLASS_MAPPINGS`，45 个节点）为准。
+> 显示名均带 `lrzjason` 后缀；节点菜单分类多为 `advanced/conditioning`，图像类节点在 `image`，模型补丁在 `Krea2/edit` / `QwenImage/edit` / `Flux2Klein/edit` / `Flux3Klein/edit`。
+> 前端脚本在 `web/js/`（`WEB_DIRECTORY = "./web"`）：`BreastSizeControl_EditUtils` 的画布编辑器，以及 `Flux3KleinBBox_EditUtils` 的 bbox 画布编辑器（`flux3_bbox_editor.js`）。
 > 若文档与代码不符，以代码为准。
 
 ## 目录
@@ -11,7 +11,7 @@
 - [二、文本/图像编码节点（Text Encode）](#二文本图像编码节点text-encode)
 - [三、Config Preparer（configs 链）](#三config-preparerconfigs-链)
 - [四、Output Extractor（custom_output 拆包）](#四output-extractorcustom_output-拆包)
-- [五、模型补丁（Krea2 / QwenImage / QwenImage 2.1 / Flux2Klein / Boogu）](#五模型补丁krea2--qwenimage--qwenimage-21--flux2klein--boogu)
+- [五、模型补丁（Krea2 / QwenImage / QwenImage 2.1 / Flux2Klein / Flux3Klein / Boogu）](#五模型补丁krea2--qwenimage--qwenimage-21--flux2klein--flux3klein--boogu)
 - [六、条件缓存（Save/Load Condition）](#六条件缓存saveload-condition)
 - [七、图像处理与杂项工具](#七图像处理与杂项工具)
 
@@ -24,18 +24,18 @@
 ### ModelConfig_EditUtils
 
 **显示名**：EditUtils: Model Config lrzjason
-通用模型配置节点，可选 qwen / flux2klein / boogu。
+通用模型配置节点，可选 qwen / flux2klein / flux3klein / boogu。
 
 | 输入 | 类型 | 默认 | 说明 |
 |---|---|---|---|
-| model_choice | COMBO: `qwen`/`flux2klein`/`boogu` | `qwen` | 模型选择 |
+| model_choice | COMBO: `qwen`/`flux2klein`/`flux3klein`/`boogu` | `qwen` | 模型选择 |
 | model_name | STRING | `""` | 留空时使用 model_choice |
-| vae_unit | INT (8–64, step 8) | 8 | VAE 对齐单位；Qwen=8，Flux2Klein=16，Boogu=8 |
+| vae_unit | INT (8–64, step 8) | 8 | VAE 对齐单位；Qwen=8，Flux2Klein=16，Flux3Klein=16，Boogu=8 |
 | instruction | STRING (optional, multiline) | `""` | 自定义 system prompt；留空用内置默认。boogu 忽略此项 |
 
 - 输出：`model_config` (DICT) — `{model_name, vae_unit, llama_template}`。
 - boogu 时 `llama_template` 强制为 `""`（Boogu tokenizer 自动选择 system prompt）。
-- 注意：vae_unit 默认值是 8，选择 flux2klein 时需手动改为 16；建议直接用下方各模型专用 Config 节点。
+- 注意：vae_unit 默认值是 8，选择 flux2klein / flux3klein 时需手动改为 16；建议直接用下方各模型专用 Config 节点。
 
 ### QwenModelConfig_EditUtils
 
@@ -56,6 +56,21 @@ Flux2Klein 专用配置：固定 `model_name="flux2klein"`、`vae_unit=16`。
 | 输入 | 类型 | 默认 | 说明 |
 |---|---|---|---|
 | instruction | STRING (optional, multiline) | `""` | 留空时 `llama_template=""`（推荐）；非空时构造 llama 模板（允许自定义但不推荐） |
+
+### Flux3KleinModelConfig_EditUtils
+
+**显示名**：EditUtils: Flux3Klein Model Config lrzjason
+FLUX.3 Klein（base 与 step-distilled）专用配置：固定 `model_name="flux3klein"`、`vae_unit=16`、`llama_template=""`。
+
+| 输入 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| instruction | STRING (optional, multiline) | `""` | 留空时 `llama_template=""`（推荐，tokenizer 自带 instruct 模板并把文本窗口右填充到 80 的倍数）；非空时构造自定义模板 |
+| flow_map | BOOLEAN (optional) | `False` | 标记该 checkpoint 是否为 step-distilled（flow-map）。**仅作信息记录**：ComfyUI 会自行从 checkpoint 识别 `flow_map`。为 `True` 时应使用约 4–16 步、CFG 1.0（无负向提示词） |
+
+- 输出：`model_config` (DICT)。
+- **FLUX.3 klein 不是 FLUX.2 klein 的改名**，而是另一套架构：per-mode 模块 + joint single 模块（image / image_cond / text 三种 token 模式）、Qwen3-VL 文本编码器（8 层堆叠 `[4,8,12,16,20,24,28,32]` → `joint_attention_dim=20480`）、参考图以**负的 `l` 轴坐标**（-1, -2, …）区分、图像 H/W RoPE 位置按 `image_rope_scale=0.5` 缩放；distilled 变体是 flow-map 模型（`flow_map=True`）。
+- **VAE**：与 FLUX.2 相同的 packed autoencoder（32 潜通道、8× 下采样、2×2 patchify），因此每 token 对应 16 px，`vae_unit=16`。它的归一化是 VAE 自身的 batch-norm（没有标量 `scaling_factor`/`shift_factor`），与 ComfyUI 的 Flux2 latent format 一致。
+- **ComfyUI 已原生支持**：`comfy/ldm/flux3/model.py`、`comfy/model_base.py class Flux3`、`comfy/supported_models.py class Flux3`（`image_model="flux3"`）。因此参考潜变量走标准 `reference_latents` 条件键，模型自己推导参考位置 id，**不需要** 重写 forward。
 
 ### BooguModelConfig_EditUtils
 
@@ -100,7 +115,7 @@ Qwen-Image 2.1 专用配置：固定 `model_name="qwen_image21"`、`vae_unit=16`
 ### EditTextEncode_EditUtils
 
 **显示名**：EditUtils: EditTextEncode lrzjason
-核心统一编码节点。按 `model_config.model_name` 分流到 Qwen / Flux2Klein（共用代码路径）或 Boogu（独立早返回路径）逻辑。
+核心统一编码节点。按 `model_config.model_name` 分流到 Qwen / Flux2Klein / Flux3Klein（共用代码路径）或 Boogu（独立早返回路径）逻辑。
 
 | 输入 | 类型 | 默认 | 说明 |
 |---|---|---|---|
@@ -110,13 +125,19 @@ Qwen-Image 2.1 专用配置：固定 `model_name="qwen_image21"`、`vae_unit=16`
 | model_config | DICT | None | 来自 ModelConfig 系列节点 |
 | configs | LIST (optional) | None | Config Preparer 串联出的图像配置列表；不接或为空时执行纯文本编码 |
 
-- 输出：`conditioning` (CONDITIONING) · `latent` (LATENT) · `custom_output` (ANY dict) · `main_image` (IMAGE) · `mask` (MASK) · `pad_info` (ANY dict)。
+- 输出 7 个：`conditioning` (CONDITIONING) · `latent` (LATENT) · `custom_output` (ANY dict) · `main_image` (IMAGE) · `mask` (MASK) · `pad_info` (ANY dict) · **`prompt` (STRING)**。
+- **`prompt` 输出**：**实际送进 tokenizer 的那段文本**，直接接线到文本预览 / SaveText 节点即可核对模型到底收到了什么。
+  - `flux3klein`：用户 prompt **+ bbox 元素表**（与 `custom_output["composed_prompt"]` 完全一致）；
+  - `qwen` / `qwen_image21` / `flux2klein`：带 `Picture n: <|vision_start|>…` 前缀的 prompt；
+  - `boogu`：原样 prompt（Boogu tokenizer 自行选择 system prompt）。
+  - 该输出**追加在最后一位**：ComfyUI 按槽位序号匹配已保存的连线，放在末尾可保证现有工作流的输出连接不受影响。
 
-**Qwen / Flux2Klein 路径行为**
-- 对每张 `to_ref` 的图：按 `ref_longest_edge` + `ref_resize_mode` 缩放，按 `vae_unit` 对齐，`ref_crop="pad"` 时补齐到 vae_unit 倍数（主图生成 `pad_info`），然后 `vae.encode` 得到 ref latent。补齐区域的填充方式由 config 的 `pad_mode` / `pad_color` / `pad_color_rgb` / `pad_noise` 控制（qwen 系默认白边，flux2klein 默认黑边）。
+**Qwen / Flux2Klein / Flux3Klein 路径行为**
+- 对每张 `to_ref` 的图：按 `ref_longest_edge` + `ref_resize_mode` 缩放，按 `vae_unit` 对齐，`ref_crop="pad"` 时补齐到 vae_unit 倍数（主图生成 `pad_info`），然后 `vae.encode` 得到 ref latent。补齐区域的填充方式由 config 的 `pad_mode` / `pad_color` / `pad_color_rgb` / `pad_noise` 控制（qwen 系默认白边，flux2klein / flux3klein 默认黑边）。
 - 全部 ref latents 以 `reference_latents` 键挂到 conditioning 上（`node_helpers.conditioning_set_values`），采样模型据此读取。**这就是 EditUtils 条件链。**
-- `latent` 输出 = 主图（`ref_main_image`）的 ref latent；无图时为 1×4×128×128 零 latent（qwen_image21 为 1×64×128×128）。
+- `latent` 输出 = 主图（`ref_main_image`）的 ref latent；无图时为 1×4×128×128 零 latent（qwen_image21 为 1×64×128×128，flux3klein 为 1×128×128×128）。
 - Qwen 的 `to_vl` 图还会缩放到 `vl_target_size` 面积喂给 QwenVL，并在 prompt 前自动拼 `Picture n: <|vision_start|>...`；Flux2Klein 忽略 VL（代码中 `to_vl` 强制 False）。
+- **Flux3Klein 额外**：`to_vl` 同样强制 False（参考图是纯 VAE 潜变量、没有 vision slot）；不写 `reference_rope_offsets`（FLUX.3 自己推导参考位置 id）；若某个 config 带 bbox 元素表，会把该表拼到 prompt 末尾，并在 `custom_output` 里给出 `composed_prompt` 与 `bbox_rows`。
 - 主图带 mask 时，`latent` 附带 `noise_mask`，并从 `mask` 输出返回。
 - 只会有一个主图：后续 config 的 `ref_main_image` 会被强制改为 False；都不设主图时自动取第 0 张并打印提示。
 
@@ -184,6 +205,27 @@ Flux2Klein 简易一体化编码节点（vae_unit=16），无 VL 处理。
 | mask | MASK (optional) | None | 仅作用于 image1 |
 
 - 输出：`conditioning` / `latent` / `custom_output` / `main_image` / `mask`。
+
+### Flux3KleinEditTextEncode_EditUtils
+
+**显示名**：EditUtils: Flux3Klein Edit Text Encode lrzjason
+FLUX.3 Klein 简易一体化编码节点（vae_unit=16），无 VL 处理。
+
+| 输入 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| clip | CLIP | — | FLUX.3 用 Qwen3-VL 文本编码器（CLIPLoader type `flux3`） |
+| vae | VAE | — | FLUX.2 packed VAE（128ch @ 16x） |
+| prompt | STRING (multiline) | — | |
+| image1/2/3 | IMAGE (optional) | None | 至少接 image1；image1 为主图 |
+| ref_longest_edge | INT (16–4096) | 1024 | 主图 latent 网格的最长边 |
+| ref_longest_edge2 | INT (16–4096) | 1024 | 参考图 2 的最长边 |
+| ref_longest_edge3 | INT (16–4096) | 1024 | 参考图 3 的最长边 |
+| mask | MASK (optional) | None | 仅作用于 image1 |
+
+- 输出：`conditioning` / `latent` / `custom_output` / `main_image` / `mask`（**5 个**。内部调用 `EditTextEncode` 后截取前 5 个输出）。
+- 每个参考图保留自己的分辨率（各自一个 token 网格与自己的负 `l` 位置 id），不像 Qwen-Image 2.1 那样强制统一尺寸。
+- **参考图是纯 VAE 潜变量**，没有 vision slot：`to_vl` 在该路径被强制关闭。
+- 需要完整 7 个输出（含 `pad_info` 与拼好元素表的 `prompt`）时，请直接使用 `EditTextEncode_EditUtils`。
 
 ### BooguEditTextEncode_EditUtils
 
@@ -269,6 +311,115 @@ Qwen-Image 2.1 每图配置。**无独立 VL 参数**（VL 输入就是缩放后
 **显示名**：EditUtils: Flux2Klein Config Preparer lrzjason
 与 Qwen 版相同但无 VL 参数（Flux2Klein 不走 VL）。`ref_longest_edge` 范围 16–4096。其余同 QwenConfigPreparer（to_ref / ref_main_image / ref_longest_edge=1024 / ref_crop=`pad` / ref_upscale=`lanczos` / mask / ref_resize_mode=`longest_edge`）。
 
+### Flux3KleinConfigPreparer_EditUtils
+
+**显示名**：EditUtils: Flux3Klein Config Preparer lrzjason
+FLUX.3 Klein 的每图配置，并承载 **FLUX.3 的 bounding box（元素表）画布**。
+
+常规参数（`ref_crop` 默认 `pad`，`ref_longest_edge` 16–4096）：
+
+| 输入 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| image | IMAGE | — | |
+| configs | LIST (optional) | None | 串联多个 Preparer 以使用多张参考图 |
+| to_ref / ref_main_image | BOOLEAN | True / True | |
+| ref_longest_edge | INT (16–4096) | 1024 | 该参考图 latent 网格的最长边 |
+| ref_crop | COMBO: `pad`/`center`/`disabled` | `pad` | |
+| ref_upscale | COMBO: `lanczos`/`bicubic`/`area` | `lanczos` | |
+| pad_mode | COMBO: `color`/`edge`/`mirror`/`border_mean` | `color` | 仅 `ref_crop=pad` 时生效 |
+| pad_color | COMBO: `red`/`green`/`blue`/`white`/`black`/`custom` | `black` | |
+| pad_color_rgb | STRING | `-` | 6 位十六进制（`#` 可省），有效时覆盖 `pad_color` |
+| pad_noise | FLOAT (0–0.2) | 0.0 | 仅加到填充区 |
+| mask | MASK (optional) | None | |
+| ref_resize_mode | COMBO: `longest_edge`/`area` | `longest_edge` | |
+| rope_x_offset / rope_y_offset | INT (0–4096, step 16) | 0 | **无效果**，仅为图兼容保留（FLUX.3 自己推导参考位置 id） |
+
+- 输出 2 个：`configs` (LIST) · `config` (ANY)。
+- `to_vl` **不存在**：FLUX.3 文本编码器只吃文本，参考图是纯 VAE 潜变量。
+- 本节点**不再包含 bbox 画布**：绘制与元素表已拆分到独立的 `Flux3KleinBBox_EditUtils`（见下），这样 Preparer 保持简短。
+- 每个 config 会带一个稳定的 `config_id`（字符串）。因为 Preparer 会对传入链做 `copy.deepcopy`，下游链里保存的是上游 config 的**副本**，bbox 节点靠这个 id 才能认出"这张图的 config"，否则会把同一张图重复追加成第二个参考。
+
+### Flux3KleinBBox_EditUtils
+
+**显示名**：EditUtils: Flux3Klein BBox (Element Table) lrzjason
+FLUX.3 的 **bounding box（元素表）画布节点**，独立于 Config Preparer。
+
+| 输入 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| configs | LIST (optional) | None | 其它配置节点搭好的 config 链 |
+| config | ANY (optional) | None | **单张图**的 config（Preparer 的 `config` 输出）；元素表挂到它上面 |
+| image | IMAGE (optional) | — | **仅作绘制底图**，不参与编码 |
+| bbox_mode | COMBO: `generation`/`editing` | `generation` | 选择元素表的行结构（**没有 `disabled`**：本节点就是为了生成元素表，接上就应该产出；要临时停用请用 ComfyUI 的 bypass） |
+| bbox_rows | STRING（画布托管，隐藏） | `""` | 画布写入的行 JSON |
+| bbox_ids | STRING（隐藏镜像） | `""` | 每行一个 id，供工作流往返恢复 |
+| bbox_descs | STRING（隐藏镜像） | `""` | 行描述 JSON 数组 |
+
+- 输出 2 个：`configs` (LIST) · **`bbox_json` (STRING)**。**没有单独的 `config` 输出**——`configs` 里已经包含"被装饰的那条 config + 元素表"，两者是一起打包的，再输出一个 config 只会造成同一份数据的第二个真相来源。
+- **合并规则**：把元素表挂到 `config` 上，然后在 `configs` 中**替换**与它匹配的那一条（先按对象身份匹配，再按 `config_id` 匹配）；找不到才追加。因此把 Preparer 自己的 `configs` 输出接到这里**不会重复发送同一张图**。
+- **没有 `config` 输入时**（`generation` 模式的正常用法：纯文本 + 框，完全不需要参考图）：
+  - **画了框** → 追加一条**只带元素表的 config**（`bbox_table_only=True`，没有 `image`）。编码节点会跳过它的图像处理、但照常读取它的行，所以**布局依然会进 prompt**。此时 `latent` 是纯文本兜底（flux3 为 `1×128×128×128`）；如需指定尺寸，可另接空 latent 节点。
+  - **没画框** → 完全透传 `configs`，`bbox_json` 为 `""`。
+- 只接 `config`、不接 `configs` → 直接把装饰后的 config 追加成一条。
+- **`bbox_json` 输出**：整条 config 链的元素表，**JSON 数组字符串**，可直接喂给文本预览 / SaveText / 你自己的节点：
+  ```
+  [{"id": "wolf_1", "from": null, "src_bbox": null, "tgt_bbox": [817, 120, 950, 167], "desc": "a cyberpunk dog"},
+   {"id": "log_1", "from": null, "src_bbox": null, "tgt_bbox": [850, 600, 950, 850], "desc": "a fallen bamboo leaf made out of gold"}]
+  ```
+  - **没有任何行时返回空字符串 `""`**（不是 `"[]"`）：`bbox_mode=disabled`、开了模式但没画框、或行不可用（无 id / 无有效 bbox）都属于这种情况。
+  - 字段严格按模式输出：`generation` 为 `{id, bbox, desc}`；`editing` 为 `{id, from, src_bbox, tgt_bbox, desc}`（`from` / `src_bbox` / `tgt_bbox` 可为 `null`，这正是 New / Remove 行的表达方式）。内部的 `_kind` 不会出现在输出里。
+  - 该输出**追加在最后一位**（第 3 个接口），因此现有工作流的 `configs` / `config` 连线不受影响。
+  - **链式合并**：串联多个 bbox 节点时，下游节点输出的是**整条链**的行（上游在前、本节点在后），与送进 prompt 的表格完全一致；只接一个节点时就是它自己的行。
+  - **混合模式**：一条链里同时存在 `generation` 与 `editing` 表时不会崩溃——每一行都按它自己的结构输出；但 FLUX.3 是按"每次一个一致的表"训练的，所以编码节点会打印提示，建议保持一致。
+
+#### FLUX.3 元素表（bbox）画布
+
+在参考图上**画框**，框旁填 **id（单行）** 与 **desc（多行）**；坐标严格遵循 FLUX.3 规范：`[top, left, bottom, right]`，整数 0–1000，从左上角起算，因此与图片尺寸/宽高比无关。
+
+| 模式 | 每行字段 | 用途 |
+|---|---|---|
+| `generation` | `{"id", "bbox", "desc"}` | 布局生成："画一个框，描述框里放什么" |
+| `editing` | `{"id", "from", "src_bbox", "tgt_bbox", "desc"}` | 编辑：每行 保留/移动/新建/删除 一个元素 |
+
+`editing` 的四种行（画布上的 **row** 按钮一键切换，并自动保持一致）：
+
+| 行 | from | src_bbox vs tgt_bbox | 效果 |
+|---|---|---|---|
+| Keep | `ref_image_0` | 相等 | 原地不动 |
+| Move | `ref_image_0` | 不同 | 移动/缩放 |
+| New | `null` | `src_bbox=null` | 在 tgt 框内按 desc 生成（新增/替换/改色） |
+| Remove | `ref_image_0` | `tgt_bbox=null` | 删除该元素 |
+
+**画布操作**：空白处拖拽画框；拖框体移动；拖角点缩放；**右键**删除该行；`+ Box` 新增行；`Full frame` 新增 `0,0,1000,1000` 背景行；`Copy caption` 复制 `<id>` 说明文字；**`Refresh`** 重新测量并重绘画布与行表格（画布空白或显示陈旧时点一下即可；该操作不会破坏已有的行与选中状态）。`editing` 模式下用 **edit box**（source / target）选择当前在改哪个框：source 为实线（元素现在的位置），target 为虚线（目标位置）；`Remove` 行显示红色 `REMOVE`。`image` 复选框把连接的图像半透明垫底（**只作参考，绝不进入输出**），`labels` 控制是否在框上画 id。
+
+#### 行布局
+
+每个元素是一张卡片，字段各占一整行（**全宽**，长 id / 引用 / 描述都不会被截断）：
+
+| `generation` | `editing` |
+|---|---|
+| `id` | `id` |
+| `desc` | `source_ref` |
+| `bbox` 读数 | `item desc`（位于 **`source_ref` 下方**） |
+| | `src_bbox` / `tgt_bbox` 读数 |
+
+卡片标题栏显示行号、**行类型**（`Keep` / `Move` / `New` / `Remove`，带颜色）以及右侧的操作按钮。两种模式下描述字段都标为 `item desc`：`desc` 描述的是元素本身，对**所有**行类型（Keep / Move / New / Remove）都适用，标成 `move desc` 会让人误以为只有 Move 行才有描述。`editing` 模式下它的具体含义（编辑之后该元素的样子）写在悬停提示与占位文字里。
+
+#### 删除：两种不同的操作
+
+两者刻意分开，因为一个会改变图像，另一个不会。
+
+| 操作 | 位置 | 作用 |
+|---|---|---|
+| **Remove** | 每行按钮（`editing` 模式） | **从图像中删除该元素**。导出 `{from, src_bbox, tgt_bbox: null}`，模型会用元素背后的内容填充该框。按钮变红并显示 `Removing`；再次点击即可恢复你原先画的目标框。 |
+| **Delete row** | 每行按钮 | 仅从编辑器表格中删除该行，**不导出任何内容**。用于丢弃画错的行。 |
+| **右键** | 画布上 | 等同于对光标所在框执行 *Delete row*（仅编辑器）。 |
+
+因此：要让元素**从画面中消失**，用 **Remove**；要丢掉一行画错的行，用 **Delete row**。Remove 需要一个来源，所以该行必须填写 `source_ref`——若为空会自动填入 `ref_image_0`。
+
+**拼进 prompt**：FLUX.3 没有单独的 box 参数——元素表以 JSON 数组**追加在描述之后**，即 `"<描述> [ {...}, {...} ]"`。编码节点会自动完成拼接，并把拼好的完整 prompt 通过 `prompt` 输出（第 7 个接口）以及 `custom_output` 的 `composed_prompt` 输出，便于核对。
+
+**提示**：id 要在描述里以 `<id>` 引用（如 `<silhouette_1>`）；框是**引导而非裁剪遮罩**，元素可以略微超出；新建元素不要给太小的框（约 40×25 px 常不出现）；`editing` 时说明与表格要一致，需要固定不动的元素就补一行 Keep。
+
 ### BooguConfigPreparer_EditUtils
 
 **显示名**：EditUtils: Boogu Config Preparer lrzjason
@@ -326,6 +477,13 @@ Qwen-Image 2.1 每图配置。**无独立 VL 参数**（VL 输入就是缩放后
 - 输入：`custom_output` (ANY)。
 - 输出 8 个：`pad_info` (ANY) · `main_image` (IMAGE) · `vae_images` (LIST) · `ref_latents` (LIST) · `full_prompt` (STRING) · `llama_template` (STRING) · `no_refs_cond` (CONDITIONING) · `mask` (MASK)。
 
+### Flux3KleinOutputExtractor_EditUtils
+
+**显示名**：EditUtils: Flux3Klein Output Extractor lrzjason
+
+- 输入：`custom_output` (ANY)。
+- 输出 10 个：`pad_info` (ANY) · `main_image` (IMAGE) · `vae_images` (LIST) · `ref_latents` (LIST) · `full_prompt` (STRING) · `no_refs_cond` (CONDITIONING) · `mask` (MASK) · `flow_map` (BOOLEAN，该 checkpoint 是否 flow-map/step-distilled) · `bbox_rows` (LIST，本次解析出的元素表行) · `composed_prompt` (STRING，**已把元素表拼进去的完整 prompt**)。
+
 ### BooguOutputExtractor_EditUtils
 
 **显示名**：EditUtils: Boogu Output Extractor lrzjason
@@ -335,7 +493,7 @@ Qwen-Image 2.1 每图配置。**无独立 VL 参数**（VL 输入就是缩放后
 
 ---
 
-## 五、模型补丁（Krea2 / QwenImage / QwenImage 2.1 / Flux2Klein / Boogu）
+## 五、模型补丁（Krea2 / QwenImage / QwenImage 2.1 / Flux2Klein / Flux3Klein / Boogu）
 
 ### Krea2EditApply_EditUtils
 
@@ -375,6 +533,22 @@ Qwen-Image 2.1 每图配置。**无独立 VL 参数**（VL 输入就是缩放后
 - 偏移全为 0 时直接走原生 `build_sequence`（行为与未打补丁一致，前缀 KV 缓存不受影响）。
 - 补丁通过 `model.clone()` + `add_object_patch` 隔离安装：`extra_conds`（透传 `ref_rope_offsets`）、`forward`（暂存偏移）、`build_sequence`（应用偏移）。
 - 需要 ComfyUI 已内置 Qwen-Image 2.1 支持（上游 `qwen_image21`），否则模型本身无法加载为该架构。
+
+### Flux3KleinEditApply_EditUtils
+
+**显示名**：EditUtils: Flux3Klein Edit Apply (Model Check) lrzjason
+FLUX.3 Klein 编辑路径的模型校验节点。**与 Flux2KleinEditApply 不同，它不重写 forward**。
+
+| 输入 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| model | MODEL | — | FLUX.3 模型 |
+| debug_log | BOOLEAN (optional) | False | 打印 `flow_map`（是否 step-distilled）与原生参考处理说明 |
+| strict | BOOLEAN (optional) | True | 模型不像 FLUX.3 时**抛错**；关闭则打印提示后原样返回 |
+
+- 输出：`model` (MODEL)。
+- **为什么不需要打补丁**：ComfyUI 核心的 `comfy/model_base.py class Flux3` 已原生消费 `reference_latents`，并交给 `comfy/ldm/flux3/model.py`；模型自己用 `ref_ids` 推导参考位置 id（`l` 轴负坐标 -1, -2, …，`image_rope_scale = 0.5`）。EditUtils 的 `reference_rope_offsets` 在该架构上没有消费者，因此编码节点不写这个键。
+- 检测依据：模型带有 `content_mode_blocks` / `txt_mode_blocks` / `single_blocks` / `ref_ids`。
+- **用途**：给 FLUX.3 图一个与其他 EditUtils 编辑图一致的外形，并在误接成 FLUX.2 klein 补丁时**明确报错**，而不是静默地拿不到参考条件。
 
 ---
 

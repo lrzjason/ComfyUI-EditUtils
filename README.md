@@ -2,9 +2,10 @@
 
 [English](README.md) | [简体中文](README_zh.md)
 
-A collection of utility nodes for advanced image editing in ComfyUI, supporting multiple AI models including Qwen, Qwen-Image 2.1, Flux2Klein and Krea2.
+A collection of utility nodes for advanced image editing in ComfyUI, supporting multiple AI models including Qwen, Qwen-Image 2.1, Flux2Klein, Flux3Klein and Krea2.
 
 ## Update
+20261016 Added **FLUX.3 Klein** support (`flux3klein` route) with a **bounding-box editor**: the `Flux3Klein*` nodes plus a draw-your-layout canvas on `Flux3KleinBBox_EditUtils`. Draw a box on the reference, type its **id** and **desc**, and the node appends the FLUX.3 element table as a JSON array to the prompt — `generation` rows (`{id, bbox, desc}`) for layout, `editing` rows (`{id, from, src_bbox, tgt_bbox, desc}`) for keep/move/create/remove. Requires a ComfyUI build with FLUX.3 support. Working example: [flux3 editutils example.json](workflows/flux3%20editutils%20example.json).
 20261015 Added **BreastSizeControl_EditUtils** — draw a breast-size control (`_bd`) condition image on the node's own canvas: black background, one or two `#FADBAE` ellipses you can move, shape (circle ⇄ ellipse), **rotate** and colour, with the measured flat/small/medium/large/huge/gigantic areas one button away. The marker's area is the size dial. Working Krea2 example: [k2 breasts size control.json](workflows/k2%20breasts%20size%20control.json).
 20261007 Added AlphaNoiseFilter_EditUtils — clean the alpha channel of Qwen-Image 2.1 alpha generations (clip low-value alpha noise, drop small alpha islands, erode/dilate, then feather) and output a clean RGBA image plus a mask. Feathering works strictly inwards: the gradient band is created inside the matte's own edge, so the silhouette never grows into the transparent background and no background colour can leak out as a halo.
 20260920 Added Qwen-Image 2.1 support (QwenImage21ModelConfig / QwenImage21ConfigPreparer / QwenImage21EditTextEncode / QwenImage21EditApply). 64ch 16x VAE, Qwen3-VL text encoder, vision-slot latent splicing and per-reference ROPE offsets. Example workflow: [edit utils qwen image 2.1 example.json](workflows/edit%20utils%20qwen%20image%202.1%20example.json). Requires ComfyUI with upstream Qwen-Image 2.1 support.
@@ -38,7 +39,7 @@ EditUtils supports **Qwen-Image 2.1** editing with up to 3 references in the sim
 - **New VAE**: 64-channel latents with 16x spatial downscale (RGBA-aware). References are aligned to **16-pixel multiples**, matching the VAE downscale.
 - **Unified reference resize**: the vision tower and the VAE consume the *same* resized image (alpha composited over white for the encoder, full RGBA for the VAE), so there is no separate `vl_target_size` pipeline.
 
-![Qwen-Image 2.1 edit example](qwen%20image%2021%20example.png)
+![Qwen-Image 2.1 edit example](images/qwen%20image%2021%20example.png)
 
 *Result produced with [edit utils qwen image 2.1 example.json](workflows/edit%20utils%20qwen%20image%202.1%20example.json).*
 
@@ -72,11 +73,190 @@ QwenImage21ModelConfig ──────────────────┴
 - Keep `to_vl` enabled on the Config Preparer — disabling it splices the reference after the text sequence, which is an untrained path.
 - Suggested starting point (as in the example workflow): Euler / Simple, 25 steps, CFG 1.0.
 
+## FLUX.3 Klein
+
+EditUtils supports **FLUX.3 Klein** (base and step-distilled) editing through the `flux3klein` route, including the **bounding-box element table** that FLUX.3 uses to place and edit elements.
+
+> **FLUX.3 klein is not a rename of FLUX.2 klein.** It is a different architecture: per-mode blocks plus joint single blocks over three token modes (image, image_cond, text), a **Qwen3-VL** text encoder (8 stacked hidden states → `joint_attention_dim` 20480, text window right-padded to a multiple of 80), references told apart on the **`l`** position axis with **negative** coordinates (-1, -2, …), image H/W RoPE scaled by `image_rope_scale = 0.5`, and a **flow-map** distilled variant (4–16 steps, no CFG). The VAE is the FLUX.2 packed autoencoder (32 latent channels, 8x downscale, 2x2 patchify → 16 px per token), so `vae_unit = 16`.
+
+**ComfyUI already implements this natively** (`comfy/ldm/flux3/model.py`, `image_model: "flux3"`), so the reference latents travel on the standard `reference_latents` conditioning key and the model derives reference position ids itself.
+
+**Nodes:**
+
+| Node | Purpose |
+|---|---|
+| `Flux3KleinModelConfig_EditUtils` | Model config (`flux3klein` route, `vae_unit=16`). `flow_map` records whether the checkpoint is step-distilled. |
+| `Flux3KleinConfigPreparer_EditUtils` | Per-image config (`to_ref`, `ref_main_image`, `ref_longest_edge`, …). Chain multiple nodes for multiple references. |
+| `Flux3KleinBBox_EditUtils` | **The bounding-box canvas** (element table). Takes the chain plus one image's config, attaches the table to it, and returns the chain. Also outputs the table as JSON (`bbox_json`). |
+| `Flux3KleinEditTextEncode_EditUtils` | One-node simple path (image1–3), same outputs as `EditTextEncode_EditUtils`. |
+| `Flux3KleinEditApply_EditUtils` | Model check. FLUX.3 needs **no** forward rewrite, so this only validates the architecture (and catches a FLUX.2 klein patch wired by mistake). |
+| `Flux3KleinOutputExtractor_EditUtils` | Unpacks `custom_output`, exposing `composed_prompt` (prompt **with** the element table) and `bbox_rows`. |
+
+**Wiring** — as in [flux3 editutils example.json](workflows/flux3%20editutils%20example.json):
+
+```
+UNETLoader (flux3_image_klein_sd_int8_convrot) ─────────────────────────────► KSampler ──► VAEDecode ──► SaveImage
+CLIPLoader  (qwen3vl_4b_fp8_scaled, type flux3) ─┐
+VAELoader   (flux2-vae) ─────────────────────────┤
+LoadImage ──► Flux3KleinConfigPreparer ─┬─ config ──────┐
+                                         └─ (configs)    │
+LoadImage ──────────────────────────────── image ────────┤
+                                          Flux3KleinBBox ┴─► configs ─► EditTextEncode ─► KSampler
+Flux3KleinModelConfig ──────────────────────────────────────────────► EditTextEncode
+                                                          EditTextEncode ─► ConditioningZeroOut ─► KSampler (negative)
+```
+
+![FLUX.3 edit example](images/flux3%20editutils%20example.png)
+
+*The example graph and its result, produced with [flux3 editutils example.json](workflows/flux3%20editutils%20example.json).*
+
+**Settings in the example:**
+
+| | |
+|---|---|
+| Reference | scaled to `ref_longest_edge = 1536`, `ref_crop = pad`, black pad |
+| Element table | `bbox_mode = editing`, one row (`"change the hair color to red"`) |
+| Sampler | `euler` / `simple`, **8 steps**, CFG **1.0**, denoise 1.0, fixed seed |
+| Negative | `ConditioningZeroOut` on the positive (the distilled model takes no CFG guidance) |
+| Models | `flux3_image_klein_sd_int8_convrot.safetensors`, `qwen3vl_4b_fp8_scaled.safetensors` (CLIP type `flux3`), `flux2-vae.safetensors` |
+
+`Flux3KleinEditApply_EditUtils` is **not** needed here — FLUX.3 consumes `reference_latents` natively, so the graph leaves the model unpatched. CFG is 1.0 and the negative is a zeroed-out conditioning, which is what the step-distilled checkpoint expects; note id 19 in the graph suggests trying **4–16 steps**.
+
+> ⚠️ **Two things in the shipped graph are worth knowing before you run it:**
+>
+> 1. The graph's own "Notes" box still holds text copied from a BFL template: it says *"50 steps, cfg 3.5"* and refers to a `Set Reference Multi Latent` node that this graph does not contain. The table above describes what the graph actually does.
+> 2. The `prompt` widget on `EditTextEncode_EditUtils` is **empty** — the edit instruction lives only in the row's `desc`. FLUX.3's guidance (and that same note) says to write a **full caption of the result with the edit folded in**, with the table appended after it, so type a caption before generating.
+
+The drawing lives on its **own** node so the config preparer stays short. `Flux3KleinBBox_EditUtils` takes `configs` (the chain built by the other config nodes), `config` (one image's config) and `image` (only used as the drawing underlay), attaches the element table to that single config, and returns the chain with that entry **replaced** — so if you wire a preparer's own `configs` output here the image is never duplicated. Leave `configs` unconnected and the decorated config is appended instead — which is what the example does. Each image gets its own bbox node; chained bbox nodes merge into one table, exactly as the prompt has it.
+
+The node outputs `configs` and `bbox_json` only — **there is no separate `config` output**, because `configs` already carries the decorated config grouped with its table; a second copy would just be a second source of truth for the same data.
+
+### Where the boxes go
+
+`EditTextEncode_EditUtils` builds the element table for you: it collects the `bbox_rows` from **every** config in the chain, concatenates them into a single JSON array, and appends it to the prompt — `"<prompt> [ {...}, {...} ]"` — exactly the format FLUX.3 expects, with no separate parameter.
+
+The result is exposed two ways, so you can always check what the model actually received:
+
+- **`prompt` output** (7th socket, `STRING`) — the literal text handed to the tokenizer, i.e. your prompt **with** the table appended. Wire it to a text preview or a save-text node.
+- `custom_output → composed_prompt` — the same string, for graphs already using the extractor.
+
+With no boxes drawn the element table is omitted and `prompt` is simply your prompt. Note that the `prompt` output is appended **last** on purpose: ComfyUI matches saved links by slot index, so existing workflows keep their output connections.
+
+### The table as JSON
+
+`Flux3KleinBBox_EditUtils` also outputs **`bbox_json`** (3rd socket, `STRING`): the whole element table as a JSON array, ready to feed a text preview, a save-text node, or your own node.
+
+```json
+[{"id": "wolf_1", "from": null, "src_bbox": null, "tgt_bbox": [817, 120, 950, 167], "desc": "a cyberpunk dog"},
+ {"id": "log_1", "from": null, "src_bbox": null, "tgt_bbox": [850, 600, 950, 850], "desc": "a fallen bamboo leaf made out of gold"}]
+```
+
+- **An empty table returns an empty string `""`** — not `"[]"`. That covers `bbox_mode` disabled, the mode enabled with no boxes drawn, and rows that are unusable (no id, or no valid bbox).
+- The fields follow the active mode exactly: `generation` → `{id, bbox, desc}`; `editing` → `{id, from, src_bbox, tgt_bbox, desc}`, where `from` / `src_bbox` / `tgt_bbox` may be `null` (that is how **New** and **Remove** rows are expressed). The internal `_kind` bookkeeping never appears in the output.
+- It is the **last** socket, so existing `configs` / `config` links are untouched.
+- **Chaining merges:** with several preparers chained, a downstream node reports the whole chain (upstream rows first, its own last) — the same table that goes into the prompt. With a single preparer it is just that node's rows.
+
+### Bounding boxes (the element table)
+
+FLUX.3 takes its layout as a **JSON array appended to the prompt** — there is no separate box parameter. Every box is `[top, left, bottom, right]`, integers **0–1000** from the top-left corner, so a box is independent of the image's size and aspect ratio.
+
+Draw the boxes on the `Flux3KleinBBox_EditUtils` canvas; each row has a single-line **id** and a multi-line **desc**.
+
+### `generation` vs `editing`
+
+The mode decides **which question each row answers** — it is not a quality/strength setting. Pick it by what you are doing to the image:
+
+| | `generation` | `editing` |
+|---|---|---|
+| Use when | making a **new** image from a layout | changing an **existing** image |
+| Row schema | `{"id", "bbox", "desc"}` | `{"id", "from", "src_bbox", "tgt_bbox", "desc"}` |
+| Boxes per row | **one** — where the element should go | **two** — where it is now (source) and where it should go (target) |
+| Names a reference | no | yes, `from` = `ref_image_0`… |
+| Default | **this** | |
+
+- **`generation`** — "draw a box, describe what belongs in it". You give one box per element and FLUX.3 composes the picture so each element lands in its box. The reference image, if you connect one, is only used as a **drawing underlay**; the table says where things go.
+- **`editing`** — you describe the source image element by element, then change only the rows you care about. Because each row has a *source* box and a *target* box, the model knows what to keep, what to move, what to add and what to delete. This is also the only mode with the **row kind** buttons.
+
+There is **no `disabled`**: this node exists solely to build the table, so connecting it should produce one rather than silently doing nothing. The default is `generation`, the simpler of the two. To mute the node temporarily, use ComfyUI's **bypass** (Ctrl+B) instead.
+
+### Generation mode with no image and no config
+
+`generation` mode is exactly where you may have **no reference image and no config at all** — FLUX.3 layout prompts are just a caption plus boxes (`{"prompt": caption + rows}` in the API). So the boxes must still reach the model:
+
+- **Boxes drawn** → the node appends a **table-only entry** to `configs` (flagged `bbox_table_only`, with no `image`). The encoder skips its image path but still reads its rows, so **the layout goes into the prompt**. The latent is then the text-only fallback — for FLUX.3 a `1×128×128×128` zeros latent (128ch @ 16x = 2048×2048); wire an empty-latent node if you want to choose the size.
+- **No boxes drawn** → `configs` passes straight through and `bbox_json` is `""`.
+
+The same entry also works when *both* are present: an image config and a table-only entry in one chain contribute their rows in order, so you can lay out a new scene and edit a reference in the same prompt.
+
+The four `editing` row kinds (the canvas's **row** buttons set them consistently for you; the canvas also shows this list as a legend so you don't have to hover):
+
+| Row | Plain meaning | `from` | `src_bbox` vs `tgt_bbox` |
+|---|---|---|---|
+| **Keep** | leave it exactly where it is | the image | equal |
+| **Move** | move or resize it | the image | different |
+| **New** | create it — add, replace or recolour | `null` | no source; target only |
+| **Remove** | delete it | the image | no target |
+
+### About `from`, `ref` and `src`
+
+These three words all name **one thing** — the input image an element comes from. The schema just spells it three ways, which makes the editing row look like it repeats itself:
+
+- **`from`** is the *field name*
+- **`ref_image_0`** is its *value* (the doc: "source **reference**, such as `ref_image_0`")
+- **`src`** is shorthand for that same image, used in the sibling field **`src_bbox`** — literally "the box in the **source**", i.e. the box inside the `from` image
+
+So an `editing` row carries only **three** real facts:
+
+| fact | field | meaning |
+|---|---|---|
+| which image it comes from | `from` | `null` = it isn't from an image; it gets created |
+| where it is **in that image** | `src_bbox` | the box you see now (solid) |
+| where it goes **in the result** | `tgt_bbox` | the box it should end up in (dashed); `null` = delete |
+
+And the four row kinds are just those three facts in combination — which is why they read as variations of each other. In the UI the field is labelled **`from ref`** to keep both halves visible, and the empty state means "not from an image" (a **New** row). In `generation` mode none of this exists: a row has a single `bbox`.
+
+The JSON keys are fixed by FLUX.3 and are **not** renamed in the emitted table.
+
+**Canvas tools:** drag empty space to draw a box; drag the body to move; drag a corner to resize; **right click** deletes the row; `+ Box` adds a row; `Full frame` adds a `0,0,1000,1000` background row; `Copy caption` copies the `<id>` wording; **`Refresh`** re-measures and repaints the canvas and the row table (use it if the bbox area ever looks blank or stale — it is non-destructive and keeps your rows and selection). In `editing` mode the **edit box** buttons choose which box you are changing — **source** is solid (where the element is now), **target** is dashed (where it should end up), and a `Remove` row shows a red `REMOVE`. The `image` checkbox dims the connected image underneath (guidance only — never part of the output), and `labels` toggles the ids drawn on the boxes.
+
+**Row layout.** Each element is a card of full-width labelled fields, so a long id, reference or description is never truncated:
+
+| `generation` | `editing` |
+|---|---|
+| `id` | `id` |
+| `item desc` | `source_ref` |
+| `bbox` readout | `item desc` (sits **below** `source_ref`) |
+| | `src_bbox` / `tgt_bbox` readout |
+
+The card header shows the row number, the **row kind** (`Keep` / `Move` / `New` / `Remove`, colour-coded) and the two actions below. The description is labelled `item desc` in both modes because `desc` describes the element and applies to **every** row kind — in `editing` mode its meaning becomes "what the element should look like after the edit", which the tooltip and placeholder spell out.
+
+### Deleting: two different things
+
+These are deliberately separate, because one changes the image and the other does not.
+
+| Action | Where | What it does |
+|---|---|---|
+| **Remove** | per-row button (editing mode) | **Deletes the element from the image.** Exports `{from, src_bbox, tgt_bbox: null}`, so the model fills that box with whatever was behind the element. The button turns red and reads `Removing`; click again to restore the target box you had drawn. |
+| **Delete row** | per-row button | Drops the row from the editor table only — it exports nothing at all. Use it to discard a mistake. |
+| **Right click** | on the canvas | Same as *Delete row* on the box under the cursor (editor only). |
+
+So: to make an element disappear from the picture, use **Remove**; to get rid of a row you drew by accident, use **Delete row**. Removing requires a source, so the row must name a `source_ref` — if it is empty, `ref_image_0` is filled in for you.
+
+**Notes:**
+
+- Use the element ids in your caption, e.g. `<silhouette_1>`, so the text and the table agree.
+- Boxes **guide placement, they do not clip** — an element can extend slightly past its box.
+- Keep the aspect ratio you designed the boxes for: the 0–1000 grid stretches with the frame.
+- Don't make new boxes too small (in BFL's tests, a new element in roughly 40×25 px often did not appear).
+- For edits, state additions and removals in the instruction **as well as** in the rows, and add a Keep row for anything that must not move.
+- Text should get its own box per line, with the exact words quoted in `desc`.
+- Suggested sampling: the distilled checkpoint is a flow-map model — about 4–16 steps at CFG 1.0 (no negative prompt); the base model uses CFG.
+
 ## Krea2 Breast Size Control
 
 A trained control LoRA plus `BreastSizeControl_EditUtils` makes the breast size a **dial you draw**: paint one or two markers on the canvas, and the marker's **area** (its position and angle too) drives the result. The prompt describes only the scene — deliberately **no size words** — because the geometry is meant to come from the reference image alone.
 
-![Krea2 breast size control example](k2%20breasts%20size%20control.png)
+![Krea2 breast size control example](images/k2%20breasts%20size%20control.png)
 
 *The example graph and its result, produced with [k2 breasts size control.json](workflows/k2%20breasts%20size%20control.json). The canvas in the screenshot reads `832x1216 - total 2.36% (small) - marker 1/2: 1.06% @ -14.6°`, i.e. two small, slightly tilted markers.*
 
@@ -118,6 +298,10 @@ BreastSizeControl ──► QwenConfigPreparer ───────┘         
 
 Example workflows are available in the [workflows](workflows/) directory:
 
+- **[flux3 editutils example.json](workflows/flux3%20editutils%20example.json)** - FLUX.3 Klein editing workflow using the bounding-box element table. `LoadImage → Flux3KleinConfigPreparer_EditUtils → Flux3KleinBBox_EditUtils → EditTextEncode_EditUtils ← Flux3KleinModelConfig_EditUtils → KSampler → VAEDecode → SaveImage`, with `ConditioningZeroOut` feeding the negative. The BBox node takes the preparer's `config` (its `configs` input is left unconnected), so the decorated config is appended to the chain.
+  - Models: `flux3_image_klein_sd_int8_convrot.safetensors` (UNET), `qwen3vl_4b_fp8_scaled.safetensors` (CLIP, type `flux3`), `flux2-vae.safetensors` (VAE).
+  - Sampler in the example: `euler / simple`, **8 steps**, CFG 1.0, fixed seed (the distilled flow-map checkpoint samples without guidance; 4–16 steps is the range). No `Flux3KleinEditApply_EditUtils` — FLUX.3 consumes `reference_latents` natively.
+  - Requires a ComfyUI build with FLUX.3 support.
 - **[edit utils qwen image 2.1 example.json](workflows/edit%20utils%20qwen%20image%202.1%20example.json)** - Qwen-Image 2.1 editing workflow (single reference). Loads the model with `UNETLoader` + `CLIPLoader` (type `qwen_image`) + `VAELoader`, then wires `LoadImage → QwenImage21ConfigPreparer_EditUtils → EditTextEncode_EditUtils ← QwenImage21ModelConfig_EditUtils → KSampler → VAEDecode → CropWithPadInfo_EditUtils` to undo the main-image padding.
   - The reference latent is spliced into the text sequence at the vision slots (`image_slots`); the 2.1 VAE is 64-channel with 16x spatial downscale, so references align to 16-pixel multiples.
   - `rope_x_offset / rope_y_offset` on the Config Preparer shift a reference's position on the canvas when the model is patched with `QwenImage21EditApply_EditUtils` (regional editing) — the example workflow does not include that node.
@@ -139,14 +323,14 @@ Example workflows are available in the [workflows](workflows/) directory:
 
 ## Pad Edge Control
 
-When `ref_crop` is set to `pad`, the image is padded to a multiple of the VAE unit size. How that padding looks is now configurable per image through `pad_mode`, `pad_color`, `pad_color_rgb` and `pad_noise` on the config preparer nodes (`QwenConfigPreparer_EditUtils` / `QwenImage21ConfigPreparer_EditUtils` / `Flux2KleinConfigPreparer_EditUtils`), the `ConfigJsonParser_EditUtils` JSON, or the standalone `LongestEdgeImageProcess_EditUtils` node:
+When `ref_crop` is set to `pad`, the image is padded to a multiple of the VAE unit size. How that padding looks is now configurable per image through `pad_mode`, `pad_color`, `pad_color_rgb` and `pad_noise` on the config preparer nodes (`QwenConfigPreparer_EditUtils` / `QwenImage21ConfigPreparer_EditUtils` / `Flux2KleinConfigPreparer_EditUtils` / `Flux3KleinConfigPreparer_EditUtils`), the `ConfigJsonParser_EditUtils` JSON, or the standalone `LongestEdgeImageProcess_EditUtils` node:
 
 - **pad_mode** (default: `color`):
   - `color`: solid fill using `pad_color`
   - `edge`: replicate the outermost pixel row/column
   - `mirror`: reflect the content at the boundary
   - `border_mean`: fill each side with the mean of its nearest 8 pixels
-- **pad_color** (default: `white` for Qwen and Qwen-Image 2.1, `black` for Flux2Klein and standalone `LongestEdgeImageProcess_EditUtils`): dropdown with `red`, `green`, `blue`, `white`, `black`, `custom`.
+- **pad_color** (default: `white` for Qwen and Qwen-Image 2.1, `black` for Flux2Klein / Flux3Klein and standalone `LongestEdgeImageProcess_EditUtils`): dropdown with `red`, `green`, `blue`, `white`, `black`, `custom`.
 - **pad_color_rgb** (default: `-`): optional override, a **6-digit hex color, `#` optional** (e.g. `FF0000` or `#FF0000`). When it holds a valid hex it overrides `pad_color`, whatever the dropdown says. Anything else (`-`, wrong length, non-hex characters, plain numbers, `r,g,b`) is invalid and has no effect, so the dropdown value applies. `custom` carries no color of its own, so with an invalid hex it falls back to the model default.
 - **pad_noise** (default: `0.0`): Gaussian jitter (std) added **to the padding area only** — the image content is never modified. 0.02-0.05 is recommended with solid colors.
 
@@ -163,7 +347,7 @@ Documentation:
 
 ## Key Features
 
-- **Multi-Model Support**: Works with Qwen, Qwen-Image 2.1, Flux2Klein, Boogu and Krea2 models for versatile image editing
+- **Multi-Model Support**: Works with Qwen, Qwen-Image 2.1, Flux2Klein, Flux3Klein, Boogu and Krea2 models for versatile image editing
 - **Flexible Configuration**: Per-image configuration options for reference and VL processing
 - **Pad Edge Control**: Configurable pad mode/color/noise (white edge default for Qwen 1.0 and Qwen-Image 2.1) to avoid black edge amplification
 - **Unified Interface**: Single node EditTextEncode_EditUtils works with multiple models through configuration nodes
@@ -319,7 +503,7 @@ A preset rescales the **whole drawing** to the class area and keeps the two mark
 
 ### ComfyUI-EditUtils vs ComfyUI-QwenEditUtils
 ComfyUI-EditUtils is the follow-up version of ComfyUI-QwenEditUtils with the following improvements:
-- Multi-model support (Qwen, Qwen-Image 2.1, Flux2Klein, Boogu and Krea2)
+- Multi-model support (Qwen, Qwen-Image 2.1, Flux2Klein, Flux3Klein, Boogu and Krea2)
 - Unified node architecture with configuration nodes
 - Enhanced flexibility and modularity
 - Improved code organization and maintainability

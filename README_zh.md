@@ -2,9 +2,10 @@
 
 [English](README.md) | [简体中文](README_zh.md)
 
-一套用于 ComfyUI 高级图像编辑的工具节点集合，支持 Qwen、Qwen-Image 2.1、Flux2Klein、Krea2 等多种 AI 模型。
+一套用于 ComfyUI 高级图像编辑的工具节点集合，支持 Qwen、Qwen-Image 2.1、Flux2Klein、Flux3Klein、Krea2 等多种 AI 模型。
 
 ## 更新日志
+20261016 新增 **FLUX.3 Klein** 支持（`flux3klein` 路由）以及 **bbox（bounding box）画布编辑器**：新增 `Flux3Klein*` 系列节点（画布独立为 `Flux3KleinBBox_EditUtils`）。在参考图上画框、填 **id** 与 **desc**，节点会把 FLUX.3 元素表以 JSON 数组追加到 prompt —— `generation` 行（`{id, bbox, desc}`）用于布局，`editing` 行（`{id, from, src_bbox, tgt_bbox, desc}`）用于 保留/移动/新建/删除。需要 ComfyUI 已支持 FLUX.3。可运行示例：[flux3 editutils example.json](workflows/flux3%20editutils%20example.json)。
 20261015 新增 **BreastSizeControl_EditUtils** —— 在节点自带的画布上直接手绘胸部尺寸控制图（`_bd` 条件图）：黑底 + 1~2 个 `#FADBAE` 椭圆，可移动、可变形（圆 ⇄ 椭圆）、可**旋转**、可改色，并有一键套用实测的 flat/small/medium/large/huge/gigantic 档位面积。标记的**面积**就是尺寸旋钮。可运行的 Krea2 示例：[k2 breasts size control.json](workflows/k2%20breasts%20size%20control.json)。
 20261007 新增 AlphaNoiseFilter_EditUtils —— 清理 Qwen-Image 2.1 生成图的 alpha 通道（裁掉低值 alpha 噪点、删除小面积 alpha 孤岛、腐蚀/膨胀、羽化），输出干净的 RGBA 图与蒙版。羽化严格向内：渐变带建立在 matte 自身的边缘内侧，轮廓绝不向外扩展到透明区，因此不会有背景色渗出来形成彩色光晕。
 20260920 新增 Qwen-Image 2.1 支持（QwenImage21ModelConfig / QwenImage21ConfigPreparer / QwenImage21EditTextEncode / QwenImage21EditApply）。64 通道 16x VAE、Qwen3-VL 文本编码器、vision slot 潜变量拼接以及按参考图独立的 ROPE 偏移。示例工作流：[edit utils qwen image 2.1 example.json](workflows/edit%20utils%20qwen%20image%202.1%20example.json)。需要 ComfyUI 已支持上游的 Qwen-Image 2.1。
@@ -38,7 +39,7 @@ EditUtils 支持 **Qwen-Image 2.1** 编辑：简易路径最多 3 张参考图�
 - **全新 VAE**：64 通道潜变量，空间下采样 16x（支持 RGBA）。参考图对齐到 **16 像素的倍数**（与 VAE 下采样倍数一致）。
 - **统一的参考图缩放**：视觉塔（vision tower）与 VAE 使用**同一张**缩放后的图像（编码器用白底合成后的 RGB，VAE 用完整 RGBA），因此不再有单独的 `vl_target_size` 流程。
 
-![Qwen-Image 2.1 编辑示例](qwen%20image%2021%20example.png)
+![Qwen-Image 2.1 编辑示例](images/qwen%20image%2021%20example.png)
 
 *使用 [edit utils qwen image 2.1 example.json](workflows/edit%20utils%20qwen%20image%202.1%20example.json) 生成的结果。*
 
@@ -72,11 +73,189 @@ QwenImage21ModelConfig ──────────────────┴
 - 请保持 Config Preparer 上的 `to_vl` 启用 —— 关闭后参考图会被拼接到文本序列之后，这是未经训练的分支。
 - 建议的起步参数（与示例工作流一致）：Euler / Simple，25 步，CFG 1.0。
 
+## FLUX.3 Klein
+
+EditUtils 通过 `flux3klein` 路由支持 **FLUX.3 Klein**（base 与 step-distilled）编辑，并支持 FLUX.3 用来放置与编辑元素的 **bounding box 元素表**。
+
+> **FLUX.3 klein 不是 FLUX.2 klein 的改名，而是另一套架构**：per-mode 模块 + joint single 模块，三种 token 模式（image、image_cond、text）；文本编码器是 **Qwen3-VL**（8 层堆叠隐状态 → `joint_attention_dim` 20480，文本窗口右填充到 80 的倍数）；参考图以 **`l` 轴负坐标**（-1, -2, …）区分；图像 H/W RoPE 按 `image_rope_scale = 0.5` 缩放；distilled 变体是 **flow-map** 模型（4–16 步、无 CFG）。VAE 与 FLUX.2 相同（32 潜通道、8× 下采样、2×2 patchify → 每 token 16 px），因此 `vae_unit = 16`。
+
+**ComfyUI 已原生支持该架构**（`comfy/ldm/flux3/model.py`、`image_model: "flux3"`），因此参考潜变量走标准 `reference_latents` 条件键，模型自行推导参考位置 id。
+
+**节点：**
+
+| 节点 | 用途 |
+|---|---|
+| `Flux3KleinModelConfig_EditUtils` | 模型配置（`flux3klein` 路由，`vae_unit=16`）。`flow_map` 记录该 checkpoint 是否为 step-distilled |
+| `Flux3KleinConfigPreparer_EditUtils` | 每图配置（`to_ref`、`ref_main_image`、`ref_longest_edge` …）。串联多个节点即可使用多张参考图 |
+| `Flux3KleinBBox_EditUtils` | **bbox（元素表）画布**。输入配置链 + 单张图的 config，把元素表挂到该 config 上并返回整条链；同时以 JSON 输出该表（`bbox_json`） |
+| `Flux3KleinEditTextEncode_EditUtils` | 一体化简易路径（image1–3），输出与 `EditTextEncode_EditUtils` 一致 |
+| `Flux3KleinEditApply_EditUtils` | 模型校验节点。FLUX.3 **不需要**重写 forward，因此这里只校验架构（并能抓出误接 FLUX.2 klein 补丁的情况） |
+| `Flux3KleinOutputExtractor_EditUtils` | 拆包 `custom_output`，额外给出 `composed_prompt`（**含元素表**的完整 prompt）与 `bbox_rows` |
+
+**连线**（见 [flux3 editutils example.json](workflows/flux3%20editutils%20example.json)）：
+
+```
+UNETLoader (flux3_image_klein_sd_int8_convrot) ─────────────────────────────► KSampler ──► VAEDecode ──► SaveImage
+CLIPLoader  (qwen3vl_4b_fp8_scaled, type flux3) ─┐
+VAELoader   (flux2-vae) ─────────────────────────┤
+LoadImage ──► Flux3KleinConfigPreparer ─┬─ config ──────┐
+                                         └─ (configs)    │
+LoadImage ──────────────────────────────── image ────────┤
+                                          Flux3KleinBBox ┴─► configs ─► EditTextEncode ─► KSampler
+Flux3KleinModelConfig ──────────────────────────────────────────────► EditTextEncode
+                                                          EditTextEncode ─► ConditioningZeroOut ─► KSampler (负面)
+```
+
+![FLUX.3 编辑示例](images/flux3%20editutils%20example.png)
+
+*示例图与其结果，由 [flux3 editutils example.json](workflows/flux3%20editutils%20example.json) 生成。*
+
+**示例中的设置：**
+
+| | |
+|---|---|
+| 参考图 | 缩放到 `ref_longest_edge = 1536`，`ref_crop = pad`，黑色填充 |
+| 元素表 | `bbox_mode = editing`，一行（`"change the hair color to red"`） |
+| 采样器 | `euler` / `simple`，**8 步**，CFG **1.0**，denoise 1.0，固定种子 |
+| 负面 | 对正面条件做 `ConditioningZeroOut`（蒸馏模型不做 CFG 引导） |
+| 模型 | `flux3_image_klein_sd_int8_convrot.safetensors`、`qwen3vl_4b_fp8_scaled.safetensors`（CLIP 类型 `flux3`）、`flux2-vae.safetensors` |
+
+这里**不需要** `Flux3KleinEditApply_EditUtils`——FLUX.3 原生消费 `reference_latents`，所以该图不给模型打补丁。CFG 为 1.0、负面是置零条件，这正是 step-distilled checkpoint 的用法；图中 id 19 的便签建议试试 **4–16 步**。
+
+> ⚠️ **运行前有两点值得注意：**
+>
+> 1. 该图自带的 "Notes" 便签仍是 BFL 模板的原文：写着 *"50 steps, cfg 3.5"*，并提到本图并不存在的 `Set Reference Multi Latent` 节点。上表描述的是这张图的实际行为。
+> 2. `EditTextEncode_EditUtils` 的 `prompt` 控件是**空的**——编辑指令只写在行的 `desc` 里。FLUX.3 的要求（该便签自己也写了）是**先写结果图的完整 caption、把编辑融进描述**，再把元素表追加在后面，所以生成前请先填一段 caption。
+
+画布被拆到**独立节点**，让 Config Preparer 保持简短。`Flux3KleinBBox_EditUtils` 接收 `configs`（其它配置节点搭好的链）、`config`（单张图的 config）与 `image`（**仅作绘制底图**），把元素表挂到那一个 config 上，并返回**替换过该条目**的链——因此把 Preparer 自己的 `configs` 输出接到这里也**不会重复**发送同一张图；示例中 `configs` 未接线，因此把装饰后的 config 追加进去。每张图各配一个 bbox 节点，串联的 bbox 节点会合并成同一张表，与 prompt 中一致。
+
+### 元素表拼在哪里
+
+`EditTextEncode_EditUtils` 会自动完成拼接：它收集链中**所有** config 的 `bbox_rows`，合并成一个 JSON 数组，追加到 prompt 末尾 —— `"<prompt> [ {...}, {...} ]"`，这正是 FLUX.3 要求的格式，没有单独的 box 参数。因此多个 bbox 节点会合并成同一张元素表。
+
+节点用两种方式暴露结果，方便随时核对模型到底收到了什么：
+
+- **`prompt` 输出**（第 7 个接口，`STRING`）—— **实际交给 tokenizer 的文本**，即你的 prompt **加上**元素表。接到文本预览或 SaveText 节点即可查看。
+- `custom_output → composed_prompt` —— 同一个字符串，供已使用 Extractor 的图使用。
+
+当没有画任何行时元素表会被省略，`prompt` 就是原本的 prompt。注意 `prompt` 输出**故意放在最后**：ComfyUI 按槽位序号匹配已保存的连线，放在末尾可保证现有工作流的输出连接不受影响。
+
+### 元素表的 JSON 输出
+
+`Flux3KleinConfigPreparer_EditUtils` 还输出 **`bbox_json`**（第 3 个接口，`STRING`）：整张元素表的 JSON 数组，可直接接文本预览、SaveText 或你自己的节点。
+
+```json
+[{"id": "wolf_1", "from": null, "src_bbox": null, "tgt_bbox": [817, 120, 950, 167], "desc": "a cyberpunk dog"},
+ {"id": "log_1", "from": null, "src_bbox": null, "tgt_bbox": [850, 600, 950, 850], "desc": "a fallen bamboo leaf made out of gold"}]
+```
+
+- **没有行时返回空字符串 `""`**，而不是 `"[]"`。包括：开了模式但没画框、以及行不可用（无 id 或无有效 bbox）。
+- 字段严格按当前模式输出：`generation` 为 `{id, bbox, desc}`；`editing` 为 `{id, from, src_bbox, tgt_bbox, desc}`，其中 `from` / `src_bbox` / `tgt_bbox` 可为 `null`（这正是 **New** 与 **Remove** 行的表达方式）。内部的 `_kind` 不会出现在输出里。
+- 该输出在**最后一位**，因此现有的 `configs` / `config` 连线不受影响。
+- **链式合并**：串联多个 bbox 节点时，下游节点输出**整条链**的行（上游在前、本节点在后），与送进 prompt 的表格完全一致；只接一个节点时就是它自己的行。
+- **混合模式**：一条链里同时存在两种表不会崩溃，每行按各自结构输出；但 FLUX.3 按"每次一个一致的表"训练，编码节点会打印提示。
+
+### Bounding boxes（元素表）
+
+FLUX.3 把布局当作**追加在 prompt 后面的 JSON 数组**——没有单独的 box 参数。每个框是 `[top, left, bottom, right]`，整数 **0–1000**，从左上角起算，因此与图片尺寸、宽高比无关。
+
+在 `Flux3KleinBBox_EditUtils` 的画布上画框；每行有单行的 **id** 与多行的 **desc**。
+
+### `generation` 与 `editing` 的区别
+
+模式决定**每一行回答的问题**，它不是强度/质量参数。按"你要对图片做什么"来选：
+
+| | `generation` | `editing` |
+|---|---|---|
+| 何时用 | 用布局**生成新图** | **修改已有图** |
+| 行结构 | `{"id", "bbox", "desc"}` | `{"id", "from", "src_bbox", "tgt_bbox", "desc"}` |
+| 每行几个框 | **一个** —— 元素放在哪 | **两个** —— 现在在哪（source）与要放哪（target） |
+| 是否指定参考图 | 不需要 | 需要，`from` = `ref_image_0`… |
+| 默认 | **是** | |
+
+- **`generation`** —— "画一个框，描述框里放什么"。每个元素给一个框，FLUX.3 围绕这些框构图。此时接入的参考图**只作绘制底图**，元素位置完全由表格决定。
+- **`editing`** —— 逐元素描述源图，然后只改你关心的行。因为每行同时有 *source* 框与 *target* 框，模型才知道哪些保留、哪些移动、哪些新增、哪些删除。也只有这个模式有 **row**（行类型）按钮。
+
+**没有 `disabled`**：本节点存在的意义就是生成元素表，接上就应该产出，而不是静默什么都不做。默认是较简单的 `generation`。要临时停用，请用 ComfyUI 的 **bypass（Ctrl+B）**。
+
+### generation 模式下没有图像、也没有 config 输入时
+
+`generation` 模式恰恰是**可能完全没有参考图、也没有 config** 的场景——FLUX.3 的布局 prompt 就是"描述 + 框"（API 里是 `{"prompt": caption + rows}`）。所以框必须仍然能到达模型：
+
+- **画了框** → 节点追加一条**只带元素表的 config**（标记 `bbox_table_only=True`，没有 `image`）。编码节点跳过它的图像处理、但照常读取它的行，**布局会进 prompt**。此时 `latent` 为纯文本兜底（flux3 为 `1×128×128×128` 的零 latent，128ch @ 16x 即 2048×2048）；要指定尺寸可另接空 latent 节点。
+- **没画框** → `configs` 原样透传，`bbox_json` 为 `""`。
+
+这条"只带元素表"的条目在与图像 config 共存时同样有效：一条链里的图像 config 与该条目按顺序贡献各自的行，因此你可以在同一个 prompt 里既布局新画面、又编辑参考图。
+
+`editing` 的四种行（画布上的 **row** 按钮会一键设好并保持一致；画布下方也直接列出这张表，"行类型 = 含义"，不必悬停）：
+
+| 行 | 直白含义 | `from` | `src_bbox` 与 `tgt_bbox` |
+|---|---|---|---|
+| **Keep** | 原地不动 | 该图 | 相等 |
+| **Move** | 移动 / 缩放 | 该图 | 不同 |
+| **New** | 新建（新增 / 替换 / 改色） | `null` | 无来源，只有目标框 |
+| **Remove** | 删除 | 该图 | 无目标框 |
+
+### 关于 `from`、`ref`、`src` 的区别
+
+这三个词指的是**同一件事**——元素来自哪张输入图。schema 用三种写法表达同一个概念，所以编辑行看起来像在重复自己：
+
+- **`from`** 是**字段名**
+- **`ref_image_0`** 是它的**值**（规范原文：source **reference**, such as `ref_image_0`）
+- **`src`** 是同一张图的简称，用在配套字段 **`src_bbox`** 上——字面意思就是"**源**图里的那个框"，即 `from` 那张图里的框
+
+所以一条 `editing` 行只有**三件**真实信息：
+
+| 信息 | 字段 | 含义 |
+|---|---|---|
+| 它来自哪张图 | `from` | `null` = 不来自任何图，是新建的 |
+| 它**在那张图里**的位置 | `src_bbox` | 现在看到的框（实线） |
+| 它**在结果里**的位置 | `tgt_bbox` | 应该去到的框（虚线）；`null` = 删除 |
+
+四种行类型只是这三件信息的不同组合——这就是它们读起来像互相变体的原因。界面上该字段标为 **`from ref`**，让字段名与取值都可见；留空表示"不来自图像"（即 **New** 行）。`generation` 模式完全没有这些字段：一行只有一个 `bbox`。
+
+这些 JSON 键由 FLUX.3 规定，**不会**在输出表格里改名。
+
+**画布操作**：空白处拖拽画框；拖框体移动；拖角点缩放；**右键**删除该行；`+ Box` 新增行；`Full frame` 新增 `0,0,1000,1000` 背景行；`Copy caption` 复制 `<id>` 说明文字；**`Refresh`** 重新测量并重绘画布与行表格（画布空白或显示陈旧时点一下即可；该操作不会破坏已有的行与选中状态）。`editing` 模式下用 **edit box**（source / target）选择当前改哪个框：**source** 为实线（元素现在的位置），**target** 为虚线（目标位置），`Remove` 行显示红色 `REMOVE`。`image` 复选框把连接的图像半透明垫底（**只作参考，绝不进入输出**），`labels` 控制是否在框上画 id。
+
+**行布局**：每个元素是一张卡片，字段各占一整行（**全宽**，长 id / 引用 / 描述都不会被截断）：
+
+| `generation` | `editing` |
+|---|---|
+| `id` | `id` |
+| `item desc` | `source_ref` |
+| `bbox` 读数 | `item desc`（位于 **`source_ref` 下方**） |
+| | `src_bbox` / `tgt_bbox` 读数 |
+
+卡片标题栏显示行号、**行类型**（`Keep` / `Move` / `New` / `Remove`，带颜色）以及操作按钮。两种模式下描述字段都标为 `item desc`：`desc` 描述的是元素本身，对**所有**行类型都适用；在 `editing` 模式下它的含义变为"编辑之后该元素的样子"，这一点写在悬停提示与占位文字里。
+
+### 删除：两种不同的操作
+
+两者刻意分开，因为一个会改变图像，另一个不会。
+
+| 操作 | 位置 | 作用 |
+|---|---|---|
+| **Remove** | 每行按钮（`editing` 模式） | **从图像中删除该元素**。导出 `{from, src_bbox, tgt_bbox: null}`，模型会用元素背后的内容填充该框。按钮变红并显示 `Removing`；再次点击即可恢复原先画的目标框。 |
+| **Delete row** | 每行按钮 | 仅从编辑器表格中删除该行，**不导出任何内容**。用于丢弃画错的行。 |
+| **右键** | 画布上 | 等同于对光标所在框执行 *Delete row*（仅编辑器）。 |
+
+因此：要让元素**从画面中消失**，用 **Remove**；要丢掉画错的行，用 **Delete row**。Remove 需要来源，所以该行必须填 `source_ref`——为空时会自动填入 `ref_image_0`。
+
+**提示：**
+
+- 在描述里用 `<id>` 引用元素（如 `<silhouette_1>`），让文本与表格一致。
+- 框是**引导而非裁剪遮罩**，元素可以略微超出框。
+- 保持设计框时所用的宽高比：0–1000 网格会随画面拉伸。
+- 新建元素的框不要太小（BFL 实测约 40×25 px 的新元素常不出现）。
+- 做编辑时，指令里也要说明"新增/删除"，并给必须保持不动的元素补一行 Keep。
+- 文字建议每行一个框，并在 `desc` 里用引号写出准确文字。
+- 采样建议：distilled checkpoint 是 flow-map 模型——约 4–16 步、CFG 1.0（不用负面提示词）；base 模型使用 CFG。
+
 ## Krea2 胸部尺寸控制
 
 一个训练好的控制 LoRA + `BreastSizeControl_EditUtils`，把胸部尺寸变成一个**画出来的旋钮**：在画布上画 1~2 个标记，标记的**面积**（以及位置、角度）就决定结果。提示词只描述画面，**刻意不写任何尺寸词** —— 几何量应该只来自参考图。
 
-![Krea2 胸部尺寸控制示例](k2%20breasts%20size%20control.png)
+![Krea2 胸部尺寸控制示例](images/k2%20breasts%20size%20control.png)
 
 *示例工作流与生成结果，来自 [k2 breasts size control.json](workflows/k2%20breasts%20size%20control.json)。截图里画布的状态行显示 `832x1216 - total 2.36% (small) - marker 1/2: 1.06% @ -14.6°`，即两个偏小、略微倾斜的标记。*
 
@@ -118,6 +297,10 @@ BreastSizeControl ──► QwenConfigPreparer ───────┘         
 
 示例工作流位于 [workflows](workflows/) 目录：
 
+- **[flux3 editutils example.json](workflows/flux3%20editutils%20example.json)** - 使用 bounding box 元素表的 FLUX.3 Klein 编辑工作流。接线 `LoadImage → Flux3KleinConfigPreparer_EditUtils → Flux3KleinBBox_EditUtils → EditTextEncode_EditUtils ← Flux3KleinModelConfig_EditUtils → KSampler → VAEDecode → SaveImage`，负面由 `ConditioningZeroOut` 提供。BBox 节点只接 Preparer 的 `config`（`configs` 输入留空），因此装饰后的 config 会被追加进链。
+  - 模型：`flux3_image_klein_sd_int8_convrot.safetensors`（UNET）、`qwen3vl_4b_fp8_scaled.safetensors`（CLIP，type `flux3`）、`flux2-vae.safetensors`（VAE）。
+  - 示例中的采样设置：`euler / simple`，**8 步**，CFG 1.0，固定种子（蒸馏 flow-map checkpoint 不做引导；建议区间 4–16 步）。没有 `Flux3KleinEditApply_EditUtils`——FLUX.3 原生消费 `reference_latents`。
+  - 需要 ComfyUI 已支持 FLUX.3。
 - **[edit utils qwen image 2.1 example.json](workflows/edit%20utils%20qwen%20image%202.1%20example.json)** - Qwen-Image 2.1 编辑工作流（单张参考图）。使用 `UNETLoader` + `CLIPLoader`（type 选 `qwen_image`）+ `VAELoader` 加载模型，然后接线 `LoadImage → QwenImage21ConfigPreparer_EditUtils → EditTextEncode_EditUtils ← QwenImage21ModelConfig_EditUtils → KSampler → VAEDecode → CropWithPadInfo_EditUtils`，用于去掉主图的填充。
   - 参考图潜变量在 vision slot（`image_slots`）处拼接进文本序列；2.1 VAE 为 64 通道、16x 空间下采样，因此参考图按 16 像素倍数对齐。
   - Config Preparer 上的 `rope_x_offset / rope_y_offset` 在该模型被 `QwenImage21EditApply_EditUtils` 打补丁后，可平移参考图在画布上的位置（区域编辑）—— 示例工作流未包含该节点。
@@ -138,14 +321,14 @@ BreastSizeControl ──► QwenConfigPreparer ───────┘         
 
 ## 填充边缘控制（Pad Edge Control）
 
-当 `ref_crop` 设为 `pad` 时，图像会被填充到 VAE 单元尺寸的整数倍。填充区域的外观现在可以按图配置，通过配置节点上的 `pad_mode`、`pad_color`、`pad_color_rgb`、`pad_noise`（`QwenConfigPreparer_EditUtils` / `QwenImage21ConfigPreparer_EditUtils` / `Flux2KleinConfigPreparer_EditUtils`）、`ConfigJsonParser_EditUtils` 的 JSON，或独立的 `LongestEdgeImageProcess_EditUtils` 节点设置：
+当 `ref_crop` 设为 `pad` 时，图像会被填充到 VAE 单元尺寸的整数倍。填充区域的外观现在可以按图配置，通过配置节点上的 `pad_mode`、`pad_color`、`pad_color_rgb`、`pad_noise`（`QwenConfigPreparer_EditUtils` / `QwenImage21ConfigPreparer_EditUtils` / `Flux2KleinConfigPreparer_EditUtils` / `Flux3KleinConfigPreparer_EditUtils`）、`ConfigJsonParser_EditUtils` 的 JSON，或独立的 `LongestEdgeImageProcess_EditUtils` 节点设置：
 
 - **pad_mode**（默认：`color`）：
   - `color`：用 `pad_color` 纯色填充
   - `edge`：复制最外侧一行／一列像素
   - `mirror`：在边界处镜像内容
   - `border_mean`：用最近 8 个边缘像素的均值填充每一侧
-- **pad_color**（默认：Qwen 1.0 与 Qwen-Image 2.1 为 `white`；Flux2Klein 与独立的 `LongestEdgeImageProcess_EditUtils` 为 `black`）：下拉选项 `red`、`green`、`blue`、`white`、`black`、`custom`。
+- **pad_color**（默认：Qwen 1.0 与 Qwen-Image 2.1 为 `white`；Flux2Klein / Flux3Klein 与独立的 `LongestEdgeImageProcess_EditUtils` 为 `black`）：下拉选项 `red`、`green`、`blue`、`white`、`black`、`custom`。
 - **pad_color_rgb**（默认：`-`）：可选覆盖项，**6 位 hex 颜色，`#` 可有可无**（例如 `FF0000` 或 `#FF0000`）。只要是合法 hex 就会覆盖 `pad_color`（无论下拉选了什么）；其它值（`-`、长度不对、含非 hex 字符、纯数字、`r,g,b`）一律无效、不生效，以下拉选项为准。`custom` 本身不带颜色，hex 无效时回退到该模型默认色。
 - **pad_noise**（默认：`0.0`）：**只**给填充区域加高斯抖动（标准差），图像内容完全不受影响；配合纯色填充推荐 0.02–0.05。
 
@@ -161,7 +344,7 @@ BreastSizeControl ──► QwenConfigPreparer ───────┘         
 
 ## 主要特性
 
-- **多模型支持**：可用于 Qwen、Qwen-Image 2.1、Flux2Klein、Boogu 与 Krea2 模型，实现多样化的图像编辑
+- **多模型支持**：可用于 Qwen、Qwen-Image 2.1、Flux2Klein、Flux3Klein、Boogu 与 Krea2 模型，实现多样化的图像编辑
 - **灵活配置**：针对每张图片单独配置参考图与 VL 处理选项
 - **填充边缘控制**：可配置填充模式／颜色／噪声（Qwen 1.0 与 Qwen-Image 2.1 默认白边），避免生成时黑边被放大
 - **统一接口**：通过配置节点，单个 `EditTextEncode_EditUtils` 节点即可适配多种模型
@@ -191,6 +374,39 @@ BreastSizeControl ──► QwenConfigPreparer ───────┘         
 - `scale_by`：缩放系数
 
 **使用场景：** 在传给其他节点之前先做长边缩放预处理，或在编码流程之外复用同一套图像处理管线。
+
+### Flux3KleinConfigPreparer_EditUtils
+
+FLUX.3 Klein 的每图配置节点（`to_ref` / `ref_main_image` / `ref_longest_edge` / 填充 等）。**bbox 画布已拆分到独立节点** `Flux3KleinBBox_EditUtils`，以保持本节点简短。
+
+**输出：** `configs` (LIST) · `config` (ANY)。
+
+**使用场景：** 描述每张参考图如何缩放、是否作为主图等；元素表请接到 `Flux3KleinBBox_EditUtils`。
+
+### Flux3KleinBBox_EditUtils（bbox 画布 / 元素表）
+
+承载 FLUX.3 的 **bounding box 元素表画布**，独立于 Config Preparer，因此行编辑区域可以做得更高（行区域上限 420px，比原先高得多）。
+
+**输入：**
+- `configs`（可选）：其它配置节点搭好的 config 链
+- `config`（可选）：**单张图**的 config（Preparer 的 `config` 输出）；元素表挂到它上面
+- `image`（可选）：**仅作绘制底图**，不参与编码
+- `bbox_mode`：`generation`（**新图布局**，行 = `{id, bbox, desc}`，一个框 = 一个元素放哪里）/ `editing`（**改已有图**，行 = `{id, from, src_bbox, tgt_bbox, desc}`，每行有"现在在哪"的 source 框与"要放哪"的 target 框，并写明来自哪张参考图）。**没有 `disabled`**：本节点就是为了生成元素表，接上就应该产出；要临时停用请用 ComfyUI 的 bypass（Ctrl+B）
+- `bbox_rows`：画布托管的行 JSON（**隐藏**，请用画布编辑，不要手写）
+- `bbox_ids` / `bbox_descs`：隐藏镜像字段，用于工作流往返恢复 id 与描述
+
+**画布操作：** 空白处拖拽画框；拖框体移动；拖角点缩放；**右键**删除该行；`+ Box` 新增行；`Full frame` 新增整幅背景行；`Copy caption` 复制 `<id>` 说明文字。`editing` 模式下用 **edit box** 切换要改的是 **source**（实线，元素现在的位置）还是 **target**（虚线，目标位置）；四种行类型用 **row** 按钮一键切换。字段各占**一整行全宽**：`id` / `source_ref` / `item desc`（描述在 `source_ref` 下方）。每行有两个删除按钮：**Remove** = 从图像中删除该元素（`tgt_bbox=null`），**Delete row** = 仅从表格移除该行。`image` 复选框把连接的图像半透明垫底（仅作参考），`labels` 控制是否在框上画 id。
+
+**输出：** `configs` (LIST) · `bbox_json` (STRING)。**没有单独的 `config` 输出**——`configs` 里已经是"被装饰的那条 config + 元素表"打包在一起，再输出一个 config 只会造成同一份数据的第二个真相来源。
+
+- **合并规则**：把元素表挂到 `config`，然后在 `configs` 中**替换**匹配的那一条（先按对象身份，再按稳定的 `config_id`）；找不到才追加。所以把 Preparer 自己的 `configs` 输出接到这里**不会重复发送同一张图**。
+- **没有 `config` 输入时**（`generation` 模式的正常用法：纯文本 + 框，根本不需要参考图）：
+  - **画了框** → 追加一条**只带元素表的 config**（`bbox_table_only=True`，没有 `image`）。编码节点会跳过它的图像处理、但照常读取它的行，所以**布局依然会进 prompt**。此时 `latent` 是纯文本兜底（flux3 为 `1×128×128×128`）；要指定尺寸可另接空 latent 节点。
+  - **没画框** → 完全透传 `configs`，`bbox_json` 为 `""`。
+- 只接 `config`、不接 `configs` → 直接把装饰后的 config 追加成一条。
+- `bbox_json`：整张元素表的 **JSON 数组字符串**（如 `[{"id": "wolf_1", "from": null, "src_bbox": null, "tgt_bbox": [817, 120, 950, 167], "desc": "a cyberpunk dog"}]`），可直接接文本预览 / SaveText。**没有行时返回空字符串 `""`**。串联多个 bbox 节点时输出整条链的行（与 prompt 中的表格一致）。
+
+**使用场景：** 用框告诉 FLUX.3 每个元素放在哪里（`generation`），或在编辑时逐元素 保留/移动/新建/删除（`editing`）。元素表会由编码节点自动以 JSON 数组追加到 prompt 末尾。
 
 ### ClearRefLatents_EditUtils
 从 conditioning 中剥离参考图潜变量的工具节点，输出不含任何参考潜变量的干净 conditioning。
@@ -317,7 +533,7 @@ BreastSizeControl ──► QwenConfigPreparer ───────┘         
 
 ### ComfyUI-EditUtils 与 ComfyUI-QwenEditUtils 的对比
 ComfyUI-EditUtils 是 ComfyUI-QwenEditUtils 的后续版本，包含以下改进：
-- 多模型支持（Qwen、Qwen-Image 2.1、Flux2Klein、Boogu 与 Krea2）
+- 多模型支持（Qwen、Qwen-Image 2.1、Flux2Klein、Flux3Klein、Boogu 与 Krea2）
 - 采用配置节点的统一节点架构
 - 更高的灵活性与模块化程度
 - 更好的代码组织与可维护性
