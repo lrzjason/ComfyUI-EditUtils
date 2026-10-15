@@ -5,12 +5,13 @@
 一套用于 ComfyUI 高级图像编辑的工具节点集合，支持 Qwen、Qwen-Image 2.1、Flux2Klein、Flux3Klein、Krea2 等多种 AI 模型。
 
 ## 更新日志
-20261016 新增 **FLUX.3 Klein** 支持（`flux3klein` 路由）以及 **bbox（bounding box）画布编辑器**：新增 `Flux3Klein*` 系列节点（画布独立为 `Flux3KleinBBox_EditUtils`）。在参考图上画框、填 **id** 与 **desc**，节点会把 FLUX.3 元素表以 JSON 数组追加到 prompt —— `generation` 行（`{id, bbox, desc}`）用于布局，`editing` 行（`{id, from, src_bbox, tgt_bbox, desc}`）用于 保留/移动/新建/删除。需要 ComfyUI 已支持 FLUX.3。可运行示例：[flux3 editutils example.json](workflows/flux3%20editutils%20example.json)。
-20261015 新增 **BreastSizeControl_EditUtils** —— 在节点自带的画布上直接手绘胸部尺寸控制图（`_bd` 条件图）：黑底 + 1~2 个 `#FADBAE` 椭圆，可移动、可变形（圆 ⇄ 椭圆）、可**旋转**、可改色，并有一键套用实测的 flat/small/medium/large/huge/gigantic 档位面积。标记的**面积**就是尺寸旋钮。可运行的 Krea2 示例：[k2 breasts size control.json](workflows/k2%20breasts%20size%20control.json)。
-20261007 新增 AlphaNoiseFilter_EditUtils —— 清理 Qwen-Image 2.1 生成图的 alpha 通道（裁掉低值 alpha 噪点、删除小面积 alpha 孤岛、腐蚀/膨胀、羽化），输出干净的 RGBA 图与蒙版。羽化严格向内：渐变带建立在 matte 自身的边缘内侧，轮廓绝不向外扩展到透明区，因此不会有背景色渗出来形成彩色光晕。
-20260920 新增 Qwen-Image 2.1 支持（QwenImage21ModelConfig / QwenImage21ConfigPreparer / QwenImage21EditTextEncode / QwenImage21EditApply）。64 通道 16x VAE、Qwen3-VL 文本编码器、vision slot 潜变量拼接以及按参考图独立的 ROPE 偏移。示例工作流：[edit utils qwen image 2.1 example.json](workflows/edit%20utils%20qwen%20image%202.1%20example.json)。需要 ComfyUI 已支持上游的 Qwen-Image 2.1。
-20260504 新增 Longest Edge Image Process、Clear Ref Latents、Save/Load Condition 节点，修复 Output Extractors 中 no_refs_cond 输出问题。
-20260407 修复额外高度单元填充导致的偏色问题（Extra Height Unit Pad Which Introduce Color Shift）
+
+- **20261016** 新增 **FLUX.3 Klein** 支持（`flux3klein` 路由）以及 **bbox（bounding box）画布编辑器**：新增 `Flux3Klein*` 系列节点（画布独立为 `Flux3KleinBBox_EditUtils`）。在参考图上画框、填 **id** 与 **desc**，节点会把 FLUX.3 元素表以 JSON 数组追加到 prompt —— `generation` 行（`{id, bbox, desc}`）用于布局，`editing` 行（`{id, from, src_bbox, tgt_bbox, desc}`）用于 保留/移动/新建/删除。需要 ComfyUI 已支持 FLUX.3。可运行示例：[flux3 editutils example.json](workflows/flux3%20editutils%20example.json)。
+- **20261015** 新增 **BreastSizeControl_EditUtils** —— 在节点自带的画布上直接手绘胸部尺寸控制图（`_bd` 条件图）：黑底 + 1~2 个 `#FADBAE` 椭圆，可移动、可变形（圆 ⇄ 椭圆）、可**旋转**、可改色，并有一键套用实测的 flat/small/medium/large/huge/gigantic 档位面积。标记的**面积**就是尺寸旋钮。可运行的 Krea2 示例：[k2 breasts size control.json](workflows/k2%20breasts%20size%20control.json)。
+- **20261007** 新增 AlphaNoiseFilter_EditUtils —— 清理 Qwen-Image 2.1 生成图的 alpha 通道（裁掉低值 alpha 噪点、删除小面积 alpha 孤岛、腐蚀/膨胀、羽化），输出干净的 RGBA 图与蒙版。羽化严格向内：渐变带建立在 matte 自身的边缘内侧，轮廓绝不向外扩展到透明区，因此不会有背景色渗出来形成彩色光晕。
+- **20260920** 新增 Qwen-Image 2.1 支持（QwenImage21ModelConfig / QwenImage21ConfigPreparer / QwenImage21EditTextEncode / QwenImage21EditApply）。64 通道 16x VAE、Qwen3-VL 文本编码器、vision slot 潜变量拼接以及按参考图独立的 ROPE 偏移。示例工作流：[edit utils qwen image 2.1 example.json](workflows/edit%20utils%20qwen%20image%202.1%20example.json)。需要 ComfyUI 已支持上游的 Qwen-Image 2.1。
+- **20260504** 新增 Longest Edge Image Process、Clear Ref Latents、Save/Load Condition 节点，修复 Output Extractors 中 no_refs_cond 输出问题。
+- **20260407** 修复额外高度单元填充导致的偏色问题（Extra Height Unit Pad Which Introduce Color Shift）
 
 ## 项目简介
 
@@ -18,11 +19,8 @@ ComfyUI-EditUtils 是 ComfyUI-QwenEditUtils 的后续版本，为图像编辑工
 
 ## 示例
 
-RunningHub 单图工作流：
-https://www.runninghub.ai/post/2045207600739913729/?inviteCode=rh-v1279
-
-RunningHub Simple Krea2 Depth 工作流（工作流：Simple Krea Depth）：
-https://www.runninghub.ai/post/2082077636234313729/?inviteCode=rh-v1279
+- RunningHub 单图工作流：https://www.runninghub.ai/post/2045207600739913729/?inviteCode=rh-v1279
+- RunningHub Simple Krea2 Depth 工作流（工作流：Simple Krea Depth）：https://www.runninghub.ai/post/2082077636234313729/?inviteCode=rh-v1279
 
 ## 使用建议
 
@@ -30,48 +28,6 @@ https://www.runninghub.ai/post/2082077636234313729/?inviteCode=rh-v1279
 
 - Civitai 下载：[Consistency Edit LoRA](https://civitai.com/models/1939453?modelVersionId=2634354)
 - Huggingface 下载：[Consistency Edit LoRA](https://huggingface.co/lrzjason/Consistance_Edit_Lora)
-
-## Qwen-Image 2.1
-
-EditUtils 支持 **Qwen-Image 2.1** 编辑：简易路径最多 3 张参考图，通过配置链可支持无限张。Qwen-Image 2.1 与 Qwen-Image 1.0 的工作方式不同，qwen21 系列节点已经为你处理好这些差异：
-
-- **Qwen3-VL 文本编码器**：提示词与参考图一起编码；每张参考图的潜变量会在编码器的 vision slot（`image_slots`）处拼接进文本序列 —— 不再需要 `Picture n:` 这类提示词前缀。
-- **全新 VAE**：64 通道潜变量，空间下采样 16x（支持 RGBA）。参考图对齐到 **16 像素的倍数**（与 VAE 下采样倍数一致）。
-- **统一的参考图缩放**：视觉塔（vision tower）与 VAE 使用**同一张**缩放后的图像（编码器用白底合成后的 RGB，VAE 用完整 RGBA），因此不再有单独的 `vl_target_size` 流程。
-
-![Qwen-Image 2.1 编辑示例](images/qwen%20image%2021%20example.png)
-
-*使用 [edit utils qwen image 2.1 example.json](workflows/edit%20utils%20qwen%20image%202.1%20example.json) 生成的结果。*
-
-**节点说明：**
-
-| 节点 | 用途 |
-|---|---|
-| `QwenImage21ModelConfig_EditUtils` | 模型配置（`qwen_image21` 路径，`vae_unit=16`）。instruction 留空 = 使用内置 T2I 模板；填写自定义 instruction = 使用自定义系统提示词。 |
-| `QwenImage21ConfigPreparer_EditUtils` | 单张图片的配置：`to_ref`、`ref_main_image`、`ref_longest_edge`（按 16 对齐）、`ref_crop`、`mask`、`rope_x_offset / rope_y_offset`。多张参考图时串联多个该节点。 |
-| `QwenImage21EditTextEncode_EditUtils` | 单节点简易路径（image1–3），输出与 `EditTextEncode_EditUtils` 相同。 |
-| `QwenImage21EditApply_EditUtils` | 可选的模型补丁，启用按参考图独立的 ROPE 偏移（区域编辑）。只需连接 model 线 —— 偏移量通过 conditioning 链路传递。 |
-
-**连线方式**（见 [edit utils qwen image 2.1 example.json](workflows/edit%20utils%20qwen%20image%202.1%20example.json)）：
-
-```
-UNETLoader (qwen_image_2.1) ──► [QwenImage21EditApply] ──► KSampler ──► VAEDecode ──► CropWithPadInfo ──► SaveImage
-CLIPLoader  (type qwen_image) ─┐
-VAELoader   (qwen_image_2.1_vae) ┤
-LoadImage ──► QwenImage21ConfigPreparer ─┐
-QwenImage21ModelConfig ──────────────────┴──► EditTextEncode_EditUtils ──► KSampler
-```
-
-`QwenImage21EditApply_EditUtils` 是可选的 —— 只有需要 `rope_x_offset / rope_y_offset` 区域控制时，才把它接在 `UNETLoader` 与 `KSampler` 之间。
-
-**注意事项：**
-
-- 需要 ComfyUI 已支持上游的 Qwen-Image 2.1（`qwen_image21` 模型）；旧版本上模型无法加载，此时 EditApply 节点会原样透传模型。
-- 主图填充后的潜变量即为采样的起始潜变量；解码后请用 `pad_info → CropWithPadInfo_EditUtils` 去掉填充，得到未填充的结果（与 Qwen 1.0 路径的流程一致）。
-- 2.1 的 VAE 支持 RGBA，因此生成图可以带 alpha 通道。原始 alpha 通常在透明区域散布着低值噪点，建议接 `VAEDecode → AlphaNoiseFilter_EditUtils` 清理，得到干净的抠图与蒙版。
-- `rope_x_offset / rope_y_offset` 只有在图中有 `QwenImage21EditApply_EditUtils` 时才生效；偏移全为 0 时模型走原生路径（不影响 prefix KV cache）。
-- 请保持 Config Preparer 上的 `to_vl` 启用 —— 关闭后参考图会被拼接到文本序列之后，这是未经训练的分支。
-- 建议的起步参数（与示例工作流一致）：Euler / Simple，25 步，CFG 1.0。
 
 ## FLUX.3 Klein
 
@@ -292,6 +248,48 @@ BreastSizeControl ──► QwenConfigPreparer ───────┘         
 **让标记保持在训练分布内：** 这个 LoRA 就是在该标记样式上训练的，所以请保持黑底、填充 `#FADBAE`（或相近的高亮色）、1~2 个面积代表尺寸的椭圆。画布的预设按钮会把**标记总面积**设到实测的每档中位数 —— 画面占比 `flat 1.49% / small 2.94% / medium 3.22% / large 7.18% / huge 13.95% / gigantic 16.50%` —— 这是最稳妥地落在 LoRA 真正见过的档位上的方式。接了 `image` 时条件图会被强制为目标图的精确尺寸。
 
 > ⚠️ **注意：** 该控制 LoRA 与 Krea2 编辑路径仍在开发中 —— 效果取决于 LoRA 权重与参考强度。
+
+## Qwen-Image 2.1
+
+EditUtils 支持 **Qwen-Image 2.1** 编辑：简易路径最多 3 张参考图，通过配置链可支持无限张。Qwen-Image 2.1 与 Qwen-Image 1.0 的工作方式不同，qwen21 系列节点已经为你处理好这些差异：
+
+- **Qwen3-VL 文本编码器**：提示词与参考图一起编码；每张参考图的潜变量会在编码器的 vision slot（`image_slots`）处拼接进文本序列 —— 不再需要 `Picture n:` 这类提示词前缀。
+- **全新 VAE**：64 通道潜变量，空间下采样 16x（支持 RGBA）。参考图对齐到 **16 像素的倍数**（与 VAE 下采样倍数一致）。
+- **统一的参考图缩放**：视觉塔（vision tower）与 VAE 使用**同一张**缩放后的图像（编码器用白底合成后的 RGB，VAE 用完整 RGBA），因此不再有单独的 `vl_target_size` 流程。
+
+![Qwen-Image 2.1 编辑示例](images/qwen%20image%2021%20example.png)
+
+*使用 [edit utils qwen image 2.1 example.json](workflows/edit%20utils%20qwen%20image%202.1%20example.json) 生成的结果。*
+
+**节点说明：**
+
+| 节点 | 用途 |
+|---|---|
+| `QwenImage21ModelConfig_EditUtils` | 模型配置（`qwen_image21` 路径，`vae_unit=16`）。instruction 留空 = 使用内置 T2I 模板；填写自定义 instruction = 使用自定义系统提示词。 |
+| `QwenImage21ConfigPreparer_EditUtils` | 单张图片的配置：`to_ref`、`ref_main_image`、`ref_longest_edge`（按 16 对齐）、`ref_crop`、`mask`、`rope_x_offset / rope_y_offset`。多张参考图时串联多个该节点。 |
+| `QwenImage21EditTextEncode_EditUtils` | 单节点简易路径（image1–3），输出与 `EditTextEncode_EditUtils` 相同。 |
+| `QwenImage21EditApply_EditUtils` | 可选的模型补丁，启用按参考图独立的 ROPE 偏移（区域编辑）。只需连接 model 线 —— 偏移量通过 conditioning 链路传递。 |
+
+**连线方式**（见 [edit utils qwen image 2.1 example.json](workflows/edit%20utils%20qwen%20image%202.1%20example.json)）：
+
+```
+UNETLoader (qwen_image_2.1) ──► [QwenImage21EditApply] ──► KSampler ──► VAEDecode ──► CropWithPadInfo ──► SaveImage
+CLIPLoader  (type qwen_image) ─┐
+VAELoader   (qwen_image_2.1_vae) ┤
+LoadImage ──► QwenImage21ConfigPreparer ─┐
+QwenImage21ModelConfig ──────────────────┴──► EditTextEncode_EditUtils ──► KSampler
+```
+
+`QwenImage21EditApply_EditUtils` 是可选的 —— 只有需要 `rope_x_offset / rope_y_offset` 区域控制时，才把它接在 `UNETLoader` 与 `KSampler` 之间。
+
+**注意事项：**
+
+- 需要 ComfyUI 已支持上游的 Qwen-Image 2.1（`qwen_image21` 模型）；旧版本上模型无法加载，此时 EditApply 节点会原样透传模型。
+- 主图填充后的潜变量即为采样的起始潜变量；解码后请用 `pad_info → CropWithPadInfo_EditUtils` 去掉填充，得到未填充的结果（与 Qwen 1.0 路径的流程一致）。
+- 2.1 的 VAE 支持 RGBA，因此生成图可以带 alpha 通道。原始 alpha 通常在透明区域散布着低值噪点，建议接 `VAEDecode → AlphaNoiseFilter_EditUtils` 清理，得到干净的抠图与蒙版。
+- `rope_x_offset / rope_y_offset` 只有在图中有 `QwenImage21EditApply_EditUtils` 时才生效；偏移全为 0 时模型走原生路径（不影响 prefix KV cache）。
+- 请保持 Config Preparer 上的 `to_vl` 启用 —— 关闭后参考图会被拼接到文本序列之后，这是未经训练的分支。
+- 建议的起步参数（与示例工作流一致）：Euler / Simple，25 步，CFG 1.0。
 
 ## 工作流
 

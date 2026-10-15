@@ -5,24 +5,22 @@
 A collection of utility nodes for advanced image editing in ComfyUI, supporting multiple AI models including Qwen, Qwen-Image 2.1, Flux2Klein, Flux3Klein and Krea2.
 
 ## Update
-20261016 Added **FLUX.3 Klein** support (`flux3klein` route) with a **bounding-box editor**: the `Flux3Klein*` nodes plus a draw-your-layout canvas on `Flux3KleinBBox_EditUtils`. Draw a box on the reference, type its **id** and **desc**, and the node appends the FLUX.3 element table as a JSON array to the prompt — `generation` rows (`{id, bbox, desc}`) for layout, `editing` rows (`{id, from, src_bbox, tgt_bbox, desc}`) for keep/move/create/remove. Requires a ComfyUI build with FLUX.3 support. Working example: [flux3 editutils example.json](workflows/flux3%20editutils%20example.json).
-20261015 Added **BreastSizeControl_EditUtils** — draw a breast-size control (`_bd`) condition image on the node's own canvas: black background, one or two `#FADBAE` ellipses you can move, shape (circle ⇄ ellipse), **rotate** and colour, with the measured flat/small/medium/large/huge/gigantic areas one button away. The marker's area is the size dial. Working Krea2 example: [k2 breasts size control.json](workflows/k2%20breasts%20size%20control.json).
-20261007 Added AlphaNoiseFilter_EditUtils — clean the alpha channel of Qwen-Image 2.1 alpha generations (clip low-value alpha noise, drop small alpha islands, erode/dilate, then feather) and output a clean RGBA image plus a mask. Feathering works strictly inwards: the gradient band is created inside the matte's own edge, so the silhouette never grows into the transparent background and no background colour can leak out as a halo.
-20260920 Added Qwen-Image 2.1 support (QwenImage21ModelConfig / QwenImage21ConfigPreparer / QwenImage21EditTextEncode / QwenImage21EditApply). 64ch 16x VAE, Qwen3-VL text encoder, vision-slot latent splicing and per-reference ROPE offsets. Example workflow: [edit utils qwen image 2.1 example.json](workflows/edit%20utils%20qwen%20image%202.1%20example.json). Requires ComfyUI with upstream Qwen-Image 2.1 support.
-20260504 Added Longest Edge Image Process, Clear Ref Latents, Save/Load Condition nodes. Fixed no_refs_cond output in Output Extractors.
-20260407 Fixed Extra Height Unit Pad Which Introduce Color Shift
+
+- **20261016** Added **FLUX.3 Klein** support (`flux3klein` route) with a **bounding-box editor**: the `Flux3Klein*` nodes plus a draw-your-layout canvas on `Flux3KleinBBox_EditUtils`. Draw a box on the reference, type its **id** and **desc**, and the node appends the FLUX.3 element table as a JSON array to the prompt — `generation` rows (`{id, bbox, desc}`) for layout, `editing` rows (`{id, from, src_bbox, tgt_bbox, desc}`) for keep/move/create/remove. Requires a ComfyUI build with FLUX.3 support. Working example: [flux3 editutils example.json](workflows/flux3%20editutils%20example.json).
+- **20261015** Added **BreastSizeControl_EditUtils** — draw a breast-size control (`_bd`) condition image on the node's own canvas: black background, one or two `#FADBAE` ellipses you can move, shape (circle ⇄ ellipse), **rotate** and colour, with the measured flat/small/medium/large/huge/gigantic areas one button away. The marker's area is the size dial. Working Krea2 example: [k2 breasts size control.json](workflows/k2%20breasts%20size%20control.json).
+- **20261007** Added AlphaNoiseFilter_EditUtils — clean the alpha channel of Qwen-Image 2.1 alpha generations (clip low-value alpha noise, drop small alpha islands, erode/dilate, then feather) and output a clean RGBA image plus a mask. Feathering works strictly inwards: the gradient band is created inside the matte's own edge, so the silhouette never grows into the transparent background and no background colour can leak out as a halo.
+- **20260920** Added Qwen-Image 2.1 support (QwenImage21ModelConfig / QwenImage21ConfigPreparer / QwenImage21EditTextEncode / QwenImage21EditApply). 64ch 16x VAE, Qwen3-VL text encoder, vision-slot latent splicing and per-reference ROPE offsets. Example workflow: [edit utils qwen image 2.1 example.json](workflows/edit%20utils%20qwen%20image%202.1%20example.json). Requires ComfyUI with upstream Qwen-Image 2.1 support.
+- **20260504** Added Longest Edge Image Process, Clear Ref Latents, Save/Load Condition nodes. Fixed no_refs_cond output in Output Extractors.
+- **20260407** Fixed Extra Height Unit Pad Which Introduce Color Shift
 
 ## Overview
 
 ComfyUI-EditUtils is the follow-up version of ComfyUI-QwenEditUtils, offering enhanced capabilities for image editing workflows with support for multiple AI models. This package provides a comprehensive set of tools for advanced image editing, featuring flexible configuration options and model-specific optimizations.
 
-
 ## Examples
-RunningHub Single Image Workflow:
-https://www.runninghub.ai/post/2045207600739913729/?inviteCode=rh-v1279
 
-RunningHub Simple Krea2 Depth Workflow (工作流：Simple Krea Depth):
-https://www.runninghub.ai/post/2082077636234313729/?inviteCode=rh-v1279
+- RunningHub Single Image Workflow: https://www.runninghub.ai/post/2045207600739913729/?inviteCode=rh-v1279
+- RunningHub Simple Krea2 Depth Workflow (工作流：Simple Krea Depth): https://www.runninghub.ai/post/2082077636234313729/?inviteCode=rh-v1279
 
 ## Usage Tips
 
@@ -30,48 +28,6 @@ For better consistency in local editing, it's recommended to use this workflow w
 
 - Civitai Download: [Consistency Edit LoRA](https://civitai.com/models/1939453?modelVersionId=2634354)
 - Huggingface Download: [Consistency Edit LoRA](https://huggingface.co/lrzjason/Consistance_Edit_Lora)
-
-## Qwen-Image 2.1
-
-EditUtils supports **Qwen-Image 2.1** editing with up to 3 references in the simple path (unlimited via the config chain). Qwen-Image 2.1 works differently from Qwen-Image 1.0, and the qwen21 nodes handle the differences for you:
-
-- **Qwen3-VL text encoder**: prompt and reference images are encoded together; each reference latent is spliced into the text sequence at the encoder's vision slots (`image_slots`) — no `Picture n:` prompt prefix needed.
-- **New VAE**: 64-channel latents with 16x spatial downscale (RGBA-aware). References are aligned to **16-pixel multiples**, matching the VAE downscale.
-- **Unified reference resize**: the vision tower and the VAE consume the *same* resized image (alpha composited over white for the encoder, full RGBA for the VAE), so there is no separate `vl_target_size` pipeline.
-
-![Qwen-Image 2.1 edit example](images/qwen%20image%2021%20example.png)
-
-*Result produced with [edit utils qwen image 2.1 example.json](workflows/edit%20utils%20qwen%20image%202.1%20example.json).*
-
-**Nodes:**
-
-| Node | Purpose |
-|---|---|
-| `QwenImage21ModelConfig_EditUtils` | Model config (`qwen_image21` route, `vae_unit=16`). Empty instruction = built-in T2I template; custom instruction = custom system prompt. |
-| `QwenImage21ConfigPreparer_EditUtils` | Per-image config: `to_ref`, `ref_main_image`, `ref_longest_edge` (16-aligned), `ref_crop`, `mask`, `rope_x_offset / rope_y_offset`. Chain multiple nodes for multiple references. |
-| `QwenImage21EditTextEncode_EditUtils` | One-node simple path (image1–3), same outputs as `EditTextEncode_EditUtils`. |
-| `QwenImage21EditApply_EditUtils` | Optional model patch enabling per-reference ROPE offsets (regional editing). Connect only the model wire — offsets flow through the conditioning chain. |
-
-**Wiring** (see [edit utils qwen image 2.1 example.json](workflows/edit%20utils%20qwen%20image%202.1%20example.json)):
-
-```
-UNETLoader (qwen_image_2.1) ──► [QwenImage21EditApply] ──► KSampler ──► VAEDecode ──► CropWithPadInfo ──► SaveImage
-CLIPLoader  (type qwen_image) ─┐
-VAELoader   (qwen_image_2.1_vae) ┤
-LoadImage ──► QwenImage21ConfigPreparer ─┐
-QwenImage21ModelConfig ──────────────────┴──► EditTextEncode_EditUtils ──► KSampler
-```
-
-`QwenImage21EditApply_EditUtils` is optional — add it between `UNETLoader` and `KSampler` only when you want `rope_x_offset / rope_y_offset` regional control.
-
-**Notes:**
-
-- Requires a ComfyUI build with upstream Qwen-Image 2.1 support (the `qwen_image21` model); on older builds the model won't load and the EditApply node passes the model through unchanged.
-- The main image's padded latent is the sampling start latent; use `pad_info → CropWithPadInfo_EditUtils` after decode to get the unpadded result (same flow as the Qwen 1.0 path).
-- The 2.1 VAE is RGBA-aware, so generations can carry an alpha channel. The raw alpha usually has faint low-value noise scattered over the transparent region — pipe `VAEDecode → AlphaNoiseFilter_EditUtils` to clean it into a proper cutout plus a mask.
-- `rope_x_offset / rope_y_offset` only take effect with `QwenImage21EditApply_EditUtils` in the graph; with all offsets at zero the model runs its native path (prefix KV cache unaffected).
-- Keep `to_vl` enabled on the Config Preparer — disabling it splices the reference after the text sequence, which is an untrained path.
-- Suggested starting point (as in the example workflow): Euler / Simple, 25 steps, CFG 1.0.
 
 ## FLUX.3 Klein
 
@@ -294,6 +250,48 @@ BreastSizeControl ──► QwenConfigPreparer ───────┘         
 
 > ⚠️ **Note:** this control LoRA and the Krea2 edit path are still in development — results depend on the LoRA checkpoint and the reference strength.
 
+## Qwen-Image 2.1
+
+EditUtils supports **Qwen-Image 2.1** editing with up to 3 references in the simple path (unlimited via the config chain). Qwen-Image 2.1 works differently from Qwen-Image 1.0, and the qwen21 nodes handle the differences for you:
+
+- **Qwen3-VL text encoder**: prompt and reference images are encoded together; each reference latent is spliced into the text sequence at the encoder's vision slots (`image_slots`) — no `Picture n:` prompt prefix needed.
+- **New VAE**: 64-channel latents with 16x spatial downscale (RGBA-aware). References are aligned to **16-pixel multiples**, matching the VAE downscale.
+- **Unified reference resize**: the vision tower and the VAE consume the *same* resized image (alpha composited over white for the encoder, full RGBA for the VAE), so there is no separate `vl_target_size` pipeline.
+
+![Qwen-Image 2.1 edit example](images/qwen%20image%2021%20example.png)
+
+*Result produced with [edit utils qwen image 2.1 example.json](workflows/edit%20utils%20qwen%20image%202.1%20example.json).*
+
+**Nodes:**
+
+| Node | Purpose |
+|---|---|
+| `QwenImage21ModelConfig_EditUtils` | Model config (`qwen_image21` route, `vae_unit=16`). Empty instruction = built-in T2I template; custom instruction = custom system prompt. |
+| `QwenImage21ConfigPreparer_EditUtils` | Per-image config: `to_ref`, `ref_main_image`, `ref_longest_edge` (16-aligned), `ref_crop`, `mask`, `rope_x_offset / rope_y_offset`. Chain multiple nodes for multiple references. |
+| `QwenImage21EditTextEncode_EditUtils` | One-node simple path (image1–3), same outputs as `EditTextEncode_EditUtils`. |
+| `QwenImage21EditApply_EditUtils` | Optional model patch enabling per-reference ROPE offsets (regional editing). Connect only the model wire — offsets flow through the conditioning chain. |
+
+**Wiring** (see [edit utils qwen image 2.1 example.json](workflows/edit%20utils%20qwen%20image%202.1%20example.json)):
+
+```
+UNETLoader (qwen_image_2.1) ──► [QwenImage21EditApply] ──► KSampler ──► VAEDecode ──► CropWithPadInfo ──► SaveImage
+CLIPLoader  (type qwen_image) ─┐
+VAELoader   (qwen_image_2.1_vae) ┤
+LoadImage ──► QwenImage21ConfigPreparer ─┐
+QwenImage21ModelConfig ──────────────────┴──► EditTextEncode_EditUtils ──► KSampler
+```
+
+`QwenImage21EditApply_EditUtils` is optional — add it between `UNETLoader` and `KSampler` only when you want `rope_x_offset / rope_y_offset` regional control.
+
+**Notes:**
+
+- Requires a ComfyUI build with upstream Qwen-Image 2.1 support (the `qwen_image21` model); on older builds the model won't load and the EditApply node passes the model through unchanged.
+- The main image's padded latent is the sampling start latent; use `pad_info → CropWithPadInfo_EditUtils` after decode to get the unpadded result (same flow as the Qwen 1.0 path).
+- The 2.1 VAE is RGBA-aware, so generations can carry an alpha channel. The raw alpha usually has faint low-value noise scattered over the transparent region — pipe `VAEDecode → AlphaNoiseFilter_EditUtils` to clean it into a proper cutout plus a mask.
+- `rope_x_offset / rope_y_offset` only take effect with `QwenImage21EditApply_EditUtils` in the graph; with all offsets at zero the model runs its native path (prefix KV cache unaffected).
+- Keep `to_vl` enabled on the Config Preparer — disabling it splices the reference after the text sequence, which is an untrained path.
+- Suggested starting point (as in the example workflow): Euler / Simple, 25 steps, CFG 1.0.
+
 ## Workflows
 
 Example workflows are available in the [workflows](workflows/) directory:
@@ -320,7 +318,6 @@ Example workflows are available in the [workflows](workflows/) directory:
   - Simple workflow: up to 3 images
   - Single and multiple workflows: unlimited images (connect multiple configs)
 
-
 ## Pad Edge Control
 
 When `ref_crop` is set to `pad`, the image is padded to a multiple of the VAE unit size. How that padding looks is now configurable per image through `pad_mode`, `pad_color`, `pad_color_rgb` and `pad_noise` on the config preparer nodes (`QwenConfigPreparer_EditUtils` / `QwenImage21ConfigPreparer_EditUtils` / `Flux2KleinConfigPreparer_EditUtils` / `Flux3KleinConfigPreparer_EditUtils`), the `ConfigJsonParser_EditUtils` JSON, or the standalone `LongestEdgeImageProcess_EditUtils` node:
@@ -338,12 +335,10 @@ When `ref_crop` is set to `pad`, the image is padded to a multiple of the VAE un
 
 The mask/semantics of the padded area are unchanged (it is always masked out), and `CropWithPadInfo_EditUtils` still crops the padding away correctly.
 
-
 ## Node Categories
 Documentation:
 
 - [Node Documentation](nodes_doc.md)
-
 
 ## Key Features
 
