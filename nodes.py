@@ -17,6 +17,14 @@ import comfy.conds
 
 from PIL import Image, ImageOps, ImageSequence
 
+try:
+    from scipy import ndimage as _scipy_ndimage
+except ImportError:
+    # scipy is a ComfyUI dependency; the alpha island filter and the inward
+    # feather fall back to torch-only implementations when it is unavailable.
+    _scipy_ndimage = None
+
+
 class CropWithPadInfo_EditUtils:
     @classmethod
     def INPUT_TYPES(s):
@@ -1828,6 +1836,161 @@ class DiffMask_EditUtils:
         # Normalize to [0,1] (across batch and spatial dimensions)
         diff_map = diff_map / (diff_map.max() + 1e-6)
         return diff_map
+
+
+class AlphaNoiseFilter_EditUtils:
+    """Clean the alpha channel of a Qwen-Image 2.1 alpha generation.
+
+    Qwen-Image 2.1 (64ch / 16x RGBA VAE) can generate images with an alpha
+    channel, but the raw output usually carries faint, low-value alpha noise
+    scattered across the transparent region. It is barely visible on its own,
+    yet it breaks compositing, cutouts and mask-driven editing. This node
+    removes that noise and outputs a clean alpha image together with its mask.
+    """
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "image": ("IMAGE", {"tooltip": "RGBA image, e.g. the VAEDecode output of the Qwen-Image 2.1 VAE"}),
+            },
+            "optional": {
+                "mask": ("MASK", {"tooltip": "Used as the alpha when the input image has no alpha channel (RGB input)"}),
+                "alpha_threshold": ("FLOAT", {"default": 0.10, "min": 0.0, "max": 1.0, "step": 0.01,
+                                              "tooltip": "Alpha below this is treated as low-value noise and clipped to 0 (0 disables)"}),
+                "min_area": ("INT", {"default": 100, "min": 0, "max": 65536, "step": 1,
+                                     "tooltip": "Drop isolated alpha islands smaller than this many pixels (0 disables)"}),
+                "feather": ("FLOAT", {"default": 2.0, "min": 0.0, "max": 32.0, "step": 0.5,
+                                      "tooltip": "Width in pixels of the gradient band created inside the edge: fully transparent at the matte boundary, rising smoothly to fully opaque `feather` px inwards. The matte never grows outwards, so no pixel the generator left transparent can become visible (0 = hard edge)"}),
+                "invert_mask": ("BOOLEAN", {"default": False,
+                                            "tooltip": "Output 1 - alpha as the mask (white = transparent, the ComfyUI inpaint convention)"}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "MASK",)
+    RETURN_NAMES = ("image", "mask",)
+    FUNCTION = "handle_alpha"
+    CATEGORY = "image"
+    DESCRIPTION = (
+        "Clean the alpha channel of a Qwen-Image 2.1 alpha generation: clip "
+        "low-value alpha noise, drop small isolated alpha islands, then feather "
+        "inwards from the edge, and output a clean RGBA image and its mask. "
+        "Only the alpha channel is modified, and feathering only ever reduces "
+        "alpha inside the matte, so the silhouette never grows into the "
+        "transparent background."
+    )
+
+    def handle_alpha(self, image, mask=None, alpha_threshold=0.10, min_area=100,
+                     feather=2.0, invert_mask=False):
+        if image.ndim != 4:
+            raise ValueError(f"AlphaNoiseFilter: expected an image tensor (B, H, W, C), got shape {tuple(image.shape)}")
+
+        device = image.device
+        rgb = image[..., :3]
+
+        # --- alpha source: image alpha channel wins, fall back to the mask ---
+        if image.shape[-1] >= 4:
+            alpha = image[..., 3].unsqueeze(1)
+        elif mask is not None:
+            alpha = mask
+            if alpha.ndim == 2:
+                alpha = alpha.unsqueeze(0)
+            alpha = alpha.unsqueeze(1)
+            if alpha.shape[-2:] != rgb.shape[1:3]:
+                alpha = F.interpolate(alpha, size=rgb.shape[1:3], mode="bilinear", align_corners=False)
+        else:
+            raise ValueError(
+                "AlphaNoiseFilter: the input image has no alpha channel "
+                f"({image.shape[-1]} channels) and no mask is connected."
+            )
+
+        alpha = alpha.to(dtype=torch.float32, device=device)
+
+        # 1) cut the faint low-value noise wash
+        if alpha_threshold > 0:
+            alpha = alpha * (alpha >= alpha_threshold).float()
+
+        # 2) drop small isolated alpha islands left by the cut
+        if min_area > 0:
+            alpha = self._remove_small_islands(alpha, min_area)
+
+        # 3) feather: soften the edge from the inside only
+        if feather > 0:
+            alpha = self._feather_inward(alpha, feather)
+
+        out_image = torch.cat([rgb, alpha.permute(0, 2, 3, 1)], dim=-1).to(device=device, dtype=image.dtype)
+        out_mask = alpha[:, 0]
+        if invert_mask:
+            out_mask = 1.0 - out_mask
+        out_mask = out_mask.to(device=device, dtype=torch.float32)
+        return (out_image, out_mask)
+
+    @staticmethod
+    def _remove_small_islands(alpha, min_area):
+        """Zero out connected alpha regions smaller than min_area pixels."""
+        out = alpha.clone()
+        for i in range(alpha.shape[0]):
+            frame = alpha[i, 0].detach().cpu().numpy()
+            if _scipy_ndimage is not None:
+                labels, num = _scipy_ndimage.label(frame > 0)
+                if num <= 0:
+                    continue
+                sizes = _scipy_ndimage.sum(np.ones_like(labels), labels, index=np.arange(1, num + 1))
+                keep = np.zeros(num + 1, dtype=bool)
+                keep[1:] = sizes >= min_area
+                frame = frame * keep[labels].astype(np.float32)
+            else:
+                # Fallback: grayscale opening with a disk of area ~= min_area.
+                r = max(1, int(math.ceil(math.sqrt(min_area / math.pi))))
+                k = r * 2 + 1
+                t = torch.from_numpy(frame)[None, None]
+                t = -F.max_pool2d(-t, kernel_size=k, stride=1, padding=r)
+                t = F.max_pool2d(t, kernel_size=k, stride=1, padding=r)
+                frame = frame * (t[0, 0].numpy() > 0).astype(np.float32)
+            out[i, 0] = torch.from_numpy(np.ascontiguousarray(frame)).to(alpha.device)
+        return out
+
+    @staticmethod
+    def _feather_inward(alpha, width):
+        """Soften the matte inwards from its own boundary as a gradient.
+
+        `width` pixels inside the boundary the alpha fades from fully transparent
+        (on the boundary itself) to fully opaque, and anything deeper is left
+        untouched. Alpha is never created outside the region the matte already
+        marks, so feathering cannot make a pixel visible that the generator left
+        transparent -- those pixels still carry the raw background colour, which
+        is what produced the coloured halo when the matte was blurred
+        symmetrically.
+        """
+        if _scipy_ndimage is not None:
+            out = alpha.clone()
+            for i in range(alpha.shape[0]):
+                frame = alpha[i, 0].detach().cpu().numpy()
+                if not (frame > 0).any():
+                    continue
+                # distance_transform_edt is 1 on the outermost matte pixel, so
+                # subtracting 1 makes the ramp start at 0 exactly there.
+                dist = _scipy_ndimage.distance_transform_edt(frame > 0)
+                t = np.clip((dist - 1.0) / width, 0.0, 1.0)
+                ramp = t * t * (3.0 - 2.0 * t)          # smoothstep
+                out[i, 0] = torch.from_numpy(np.ascontiguousarray(frame * ramp)).to(alpha.device)
+            return out
+        return AlphaNoiseFilter_EditUtils._inward_ramp_by_erosion(alpha, width)
+
+    @staticmethod
+    def _inward_ramp_by_erosion(alpha, width):
+        """scipy-free fallback: the same gradient built from 1px erosions.
+
+        Summing the matte eroded by 1..width pixels yields a linear ramp that is
+        0 on the boundary, rises inwards, and stays 0 outside the matte.
+        """
+        rings = max(1, int(math.ceil(width)))
+        acc = torch.zeros_like(alpha)
+        eroded = -F.max_pool2d(-alpha, kernel_size=3, stride=1, padding=1)
+        for _ in range(rings):
+            acc = acc + eroded
+            eroded = -F.max_pool2d(-eroded, kernel_size=3, stride=1, padding=1)
+        return (acc / rings).clamp(0.0, 1.0)
 
 
 class RopeOffsetFromMask_EditUtils:
@@ -3778,6 +3941,254 @@ class BooguEditApply_EditUtils:
         model_patcher.add_object_patch("diffusion_model.forward", forward)
 
 
+# ---------------------------------------------------------------------------
+# Breast-size control condition image (authored on the node's canvas)
+# ---------------------------------------------------------------------------
+
+# Payload written by web/js/breast_size_control.js.  Geometry is normalised so
+# the drawing survives a canvas resize: cx/rx are fractions of the width,
+# cy/ry fractions of the height.  This default is only a starting point -- the
+# canvas owns the value from the moment the node is created.
+#
+# The default drawing is a circle pair totalling the measured "medium" class
+# area (3.22%, so 1.61% each) on the default 832x1216 canvas:
+#   rx = sqrt(0.0161 * 1216 / (pi * 832)) = 0.086545
+#   ry = rx * 832 / 1216                  = 0.059215   -> both are 72.005 px
+# Because radii are normalised per axis those two numbers are a circle only at
+# that aspect; the canvas re-derives ry whenever the canvas aspect changes, and
+# every circle it creates itself is aspect correct.
+DEFAULT_BREAST_MARKERS = json.dumps(
+    {
+        "version": 1,
+        "color": "#FADBAE",
+        "circles": [
+            {"cx": 0.355, "cy": 0.46, "rx": 0.086545, "ry": 0.059215, "angle": 0},
+            {"cx": 0.645, "cy": 0.46, "rx": 0.086545, "ry": 0.059215, "angle": 0},
+        ],
+    },
+    separators=(",", ":"),
+)
+
+
+def _hex_color_to_float01(text, fallback=(250, 219, 174)):
+    """``'#FADBAE'`` -> ``(0.980, 0.859, 0.682)``.
+
+    Accepts 3, 6 or 8 hex digits (8-digit alpha is ignored) with or without the
+    leading ``#``.  Never raises: anything unparseable returns ``fallback``,
+    which is ``#FADBAE`` in 0-1 floats.
+    """
+    if isinstance(text, str):
+        digits = text.strip().lstrip("#").strip()
+        if len(digits) in (3, 4):
+            digits = "".join(ch * 2 for ch in digits)
+        if len(digits) in (6, 8):
+            try:
+                return tuple(int(digits[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+            except ValueError:
+                pass
+    return tuple(c / 255.0 for c in fallback)
+
+
+class BreastSizeControl_EditUtils:
+    """Author a breast-size control (condition) image on the node's canvas.
+
+    The output is a black RGB image carrying one or two filled markers -- the
+    same contract as the ``_bd`` condition images in
+    ``E:\\images\\breasts_size_control``: black background, marker fill
+    ``#FADBAE`` by default, the marker's **area** standing for the breast size
+    and its **position** for where the breasts sit.  Markers are drawn as
+    ellipses, so a marker can be a true circle (corner handle / wheel / Shift)
+    or an anisotropic ellipse (edge handles), which is what the measured
+    ``_bd`` images actually use (median bbox aspect 0.91).
+
+    All geometry lives in the ``markers`` JSON payload owned by the canvas UI::
+
+        {"version": 1,
+         "color": "#FADBAE",
+         "circles": [{"cx": 0.355, "cy": 0.46, "rx": 0.135, "ry": 0.135,
+                      "angle": 0.0}, ...]}
+
+    ``cx``/``rx`` are fractions of the width, ``cy``/``ry`` fractions of the
+    height, so the drawing is resolution independent.  ``angle`` is degrees,
+    positive = clockwise on screen (same convention as ``krea2_geom_lab``); a
+    rotation moves the marker without changing its area, so it never disturbs
+    the size class.
+
+    Connect ``image`` to force the output to that image's exact pixel size --
+    the condition image must match its target pixel for pixel, otherwise the
+    marker geometry lands in the wrong place once the pair is bucketed.  With
+    nothing connected the ``width``/``height`` widgets define the canvas.
+    """
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "width": ("INT", {
+                    "default": 832, "min": 16, "max": 16384, "step": 8,
+                    "tooltip": "Canvas width, used when no image is connected. The drawing is "
+                               "stored normalised, so changing this only rescales the output.",
+                }),
+                "height": ("INT", {
+                    "default": 1216, "min": 16, "max": 16384, "step": 8,
+                    "tooltip": "Canvas height, used when no image is connected.",
+                }),
+                "markers": ("STRING", {
+                    "default": DEFAULT_BREAST_MARKERS,
+                    "multiline": False,
+                    "socketless": True,
+                    "advanced": True,
+                    "tooltip": "Owned by the node's canvas (JSON: color + one or two circles with "
+                               "cx/cy/rx/ry/angle). Edit the markers by dragging on the canvas, "
+                               "not by hand.",
+                }),
+                "antialias": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "False reproduces the existing _bd images exactly (two colours, "
+                               "hard edges); True supersamples the marker edges 4x4.",
+                }),
+            },
+            "optional": {
+                "image": ("IMAGE", {
+                    "tooltip": "Target image: the condition image is forced to its exact pixel "
+                               "size (batch: first frame decides). Required for the _bd contract "
+                               "that a condition image equals its target's size.",
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+    FUNCTION = "render_condition"
+    CATEGORY = "image"
+    DESCRIPTION = (
+        "Draw one or two breast-size control markers (black background, #FADBAE fill) directly "
+        "on the node's canvas. Drag a marker to move it, drag its edge handles to shape it "
+        "(circle or ellipse), the corner handles / wheel to scale it, the rotation handle to "
+        "angle it, and use the size-class preset buttons to set the measured "
+        "flat/small/medium/large/huge/gigantic areas."
+    )
+
+    @staticmethod
+    def _decode_markers(raw):
+        """Parse the canvas payload -> ``(color01, [(cx, cy, rx, ry, angle)])``.
+
+        Deliberately forgiving: a malformed or empty payload renders a plain
+        black canvas instead of failing the whole workflow.
+        """
+        data = {}
+        if isinstance(raw, str) and raw.strip():
+            try:
+                data = json.loads(raw)
+            except ValueError:
+                data = {}
+        if not isinstance(data, dict):
+            data = {}
+
+        color = _hex_color_to_float01(data.get("color"))
+
+        circles = []
+        items = data.get("circles")
+        if isinstance(items, list):
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    cx = float(item.get("cx", 0.5))
+                    cy = float(item.get("cy", 0.5))
+                    rx = float(item.get("rx", 0.0))
+                    ry = float(item.get("ry", 0.0))
+                except (TypeError, ValueError):
+                    continue
+                try:
+                    # A broken angle must not discard an otherwise valid marker.
+                    angle = float(item.get("angle") or 0.0)
+                except (TypeError, ValueError):
+                    angle = 0.0
+                if not all(math.isfinite(v) for v in (cx, cy, rx, ry, angle)):
+                    continue
+                if rx <= 0.0 or ry <= 0.0:
+                    continue
+                circles.append((cx, cy, rx, ry, angle))
+        return color, circles
+
+    @staticmethod
+    def _ellipse_coverage(cx, cy, rx, ry, angle_deg, height, width, samples):
+        """Antialiased coverage of one ellipse, restricted to its bounding box.
+
+        ``angle_deg`` rotates the marker clockwise on screen about its centre,
+        which only changes the sampled region -- the area is unaffected.
+        Returns ``(coverage, (y0, x0, y1, x1))`` with coverage shaped
+        ``(y1 - y0, x1 - x0)``, or ``None`` when the ellipse is off-canvas.
+        ``samples == 1`` samples pixel centres, giving a hard-edged 0/1 mask.
+        """
+        theta = math.radians(angle_deg)
+        cos_t, sin_t = math.cos(theta), math.sin(theta)
+
+        # A rotated ellipse no longer fits the axis-aligned rx/ry box: its
+        # half-extents are the projections of both axes.
+        half_w = math.sqrt((rx * cos_t) ** 2 + (ry * sin_t) ** 2)
+        half_h = math.sqrt((rx * sin_t) ** 2 + (ry * cos_t) ** 2)
+
+        x0 = max(0, int(math.floor(cx - half_w)))
+        x1 = min(width, int(math.ceil(cx + half_w)) + 1)
+        y0 = max(0, int(math.floor(cy - half_h)))
+        y1 = min(height, int(math.ceil(cy + half_h)) + 1)
+        if x1 <= x0 or y1 <= y0:
+            return None
+
+        nx, ny = x1 - x0, y1 - y0
+        ss = max(1, int(samples))
+        # Sub-pixel sample centres, in pixel coordinates.
+        sx = (torch.arange(nx * ss, dtype=torch.float32) + 0.5) / ss + x0
+        sy = (torch.arange(ny * ss, dtype=torch.float32) + 0.5) / ss + y0
+        dx = (sx - cx).view(1, -1)
+        dy = (sy - cy).view(-1, 1)
+        # Rotate the samples into the marker's local frame (inverse rotation).
+        lx = dx * cos_t + dy * sin_t
+        ly = -dx * sin_t + dy * cos_t
+        inside = (lx / rx) ** 2 + (ly / ry) ** 2 <= 1.0
+        cov = inside.to(torch.float32).view(ny, ss, nx, ss).mean(dim=(1, 3))
+        return cov, (y0, x0, y1, x1)
+
+    def render_condition(self, width, height, markers, antialias=False, image=None):
+        if image is not None:
+            if image.ndim != 4:
+                raise ValueError(
+                    f"image must be a batched IMAGE (B, H, W, C); got shape {tuple(image.shape)}"
+                )
+            height, width = int(image.shape[1]), int(image.shape[2])
+
+        width = max(1, int(width))
+        height = max(1, int(height))
+
+        color, circles = self._decode_markers(markers)
+        canvas = torch.zeros((height, width, 3), dtype=torch.float32)
+        color_t = torch.tensor(color, dtype=torch.float32).view(1, 1, 3)
+        samples = 4 if antialias else 1
+
+        for cx_n, cy_n, rx_n, ry_n, angle in circles:
+            coverage = self._ellipse_coverage(
+                cx_n * width, cy_n * height, rx_n * width, ry_n * height,
+                angle, height, width, samples,
+            )
+            if coverage is None:
+                continue
+            cov, (y0, x0, y1, x1) = coverage
+            cov = cov.unsqueeze(-1)
+            # Overlapping markers merge (union of coverage), they never add up.
+            region = canvas[y0:y1, x0:x1]
+            canvas[y0:y1, x0:x1] = region * (1.0 - cov) + color_t * cov
+
+        return {
+            # ComfyUI flattens every `ui` value (`for y in x[k]` in
+            # execution.get_output_from_returns), so each one must be a list --
+            # a bare int raises "TypeError: 'int' object is not iterable".
+            "ui": {"width": [width], "height": [height]},
+            "result": (canvas.unsqueeze(0),),
+        }
+
+
 NODE_CLASS_MAPPINGS = {
     "CropWithPadInfo_EditUtils": CropWithPadInfo_EditUtils,
     "ModelConfig_EditUtils": ModelConfig_EditUtils,
@@ -3810,12 +4221,14 @@ NODE_CLASS_MAPPINGS = {
     "LoadCondition_EditUtils": LoadCondition_EditUtils,
     "LoadConditionFromLoras_EditUtils": LoadConditionFromLoras_EditUtils,
     "DiffMask_EditUtils": DiffMask_EditUtils,
+    "AlphaNoiseFilter_EditUtils": AlphaNoiseFilter_EditUtils,
     "RopeOffsetFromMask_EditUtils": RopeOffsetFromMask_EditUtils,
     "Krea2EditApply_EditUtils": Krea2EditApply_EditUtils,
     "Flux2KleinEditApply_EditUtils": Flux2KleinEditApply_EditUtils,
     "QwenImageEditApply_EditUtils": QwenImageEditApply_EditUtils,
     "QwenImage21EditApply_EditUtils": QwenImage21EditApply_EditUtils,
     "BooguEditApply_EditUtils": BooguEditApply_EditUtils,
+    "BreastSizeControl_EditUtils": BreastSizeControl_EditUtils,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "CropWithPadInfo_EditUtils": "EditUtils: Crop With Pad Info lrzjason",
@@ -3850,10 +4263,12 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LoadCondition_EditUtils": "EditUtils: Load Condition lrzjason",
     "LoadConditionFromLoras_EditUtils": "EditUtils: Load Condition From Loras lrzjason",
     "DiffMask_EditUtils": "EditUtils: Diff Mask lrzjason",
+    "AlphaNoiseFilter_EditUtils": "EditUtils: Alpha Noise Filter lrzjason",
     "RopeOffsetFromMask_EditUtils": "EditUtils: ROPE Offset From Mask lrzjason",
     "Krea2EditApply_EditUtils": "EditUtils: Krea2 Edit Apply (Model Patch) lrzjason",
     "Flux2KleinEditApply_EditUtils": "EditUtils: Flux2Klein Edit Apply (ROPE Control) lrzjason",
     "QwenImageEditApply_EditUtils": "EditUtils: QwenImage Edit Apply (ROPE Control) lrzjason",
     "QwenImage21EditApply_EditUtils": "EditUtils: QwenImage 2.1 Edit Apply (ROPE Control) lrzjason",
     "BooguEditApply_EditUtils": "EditUtils: Boogu Edit Apply (ROPE Control) lrzjason",
+    "BreastSizeControl_EditUtils": "EditUtils: Breast Size Control (Canvas) lrzjason",
 }

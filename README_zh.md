@@ -5,6 +5,8 @@
 一套用于 ComfyUI 高级图像编辑的工具节点集合，支持 Qwen、Qwen-Image 2.1、Flux2Klein、Krea2 等多种 AI 模型。
 
 ## 更新日志
+20261015 新增 **BreastSizeControl_EditUtils** —— 在节点自带的画布上直接手绘胸部尺寸控制图（`_bd` 条件图）：黑底 + 1~2 个 `#FADBAE` 椭圆，可移动、可变形（圆 ⇄ 椭圆）、可**旋转**、可改色，并有一键套用实测的 flat/small/medium/large/huge/gigantic 档位面积。标记的**面积**就是尺寸旋钮。可运行的 Krea2 示例：[k2 breasts size control.json](workflows/k2%20breasts%20size%20control.json)。
+20261007 新增 AlphaNoiseFilter_EditUtils —— 清理 Qwen-Image 2.1 生成图的 alpha 通道（裁掉低值 alpha 噪点、删除小面积 alpha 孤岛、腐蚀/膨胀、羽化），输出干净的 RGBA 图与蒙版。羽化严格向内：渐变带建立在 matte 自身的边缘内侧，轮廓绝不向外扩展到透明区，因此不会有背景色渗出来形成彩色光晕。
 20260920 新增 Qwen-Image 2.1 支持（QwenImage21ModelConfig / QwenImage21ConfigPreparer / QwenImage21EditTextEncode / QwenImage21EditApply）。64 通道 16x VAE、Qwen3-VL 文本编码器、vision slot 潜变量拼接以及按参考图独立的 ROPE 偏移。示例工作流：[edit utils qwen image 2.1 example.json](workflows/edit%20utils%20qwen%20image%202.1%20example.json)。需要 ComfyUI 已支持上游的 Qwen-Image 2.1。
 20260504 新增 Longest Edge Image Process、Clear Ref Latents、Save/Load Condition 节点，修复 Output Extractors 中 no_refs_cond 输出问题。
 20260407 修复额外高度单元填充导致的偏色问题（Extra Height Unit Pad Which Introduce Color Shift）
@@ -65,9 +67,52 @@ QwenImage21ModelConfig ──────────────────┴
 
 - 需要 ComfyUI 已支持上游的 Qwen-Image 2.1（`qwen_image21` 模型）；旧版本上模型无法加载，此时 EditApply 节点会原样透传模型。
 - 主图填充后的潜变量即为采样的起始潜变量；解码后请用 `pad_info → CropWithPadInfo_EditUtils` 去掉填充，得到未填充的结果（与 Qwen 1.0 路径的流程一致）。
+- 2.1 的 VAE 支持 RGBA，因此生成图可以带 alpha 通道。原始 alpha 通常在透明区域散布着低值噪点，建议接 `VAEDecode → AlphaNoiseFilter_EditUtils` 清理，得到干净的抠图与蒙版。
 - `rope_x_offset / rope_y_offset` 只有在图中有 `QwenImage21EditApply_EditUtils` 时才生效；偏移全为 0 时模型走原生路径（不影响 prefix KV cache）。
 - 请保持 Config Preparer 上的 `to_vl` 启用 —— 关闭后参考图会被拼接到文本序列之后，这是未经训练的分支。
 - 建议的起步参数（与示例工作流一致）：Euler / Simple，25 步，CFG 1.0。
+
+## Krea2 胸部尺寸控制
+
+一个训练好的控制 LoRA + `BreastSizeControl_EditUtils`，把胸部尺寸变成一个**画出来的旋钮**：在画布上画 1~2 个标记，标记的**面积**（以及位置、角度）就决定结果。提示词只描述画面，**刻意不写任何尺寸词** —— 几何量应该只来自参考图。
+
+![Krea2 胸部尺寸控制示例](k2%20breasts%20size%20control.png)
+
+*示例工作流与生成结果，来自 [k2 breasts size control.json](workflows/k2%20breasts%20size%20control.json)。截图里画布的状态行显示 `832x1216 - total 2.36% (small) - marker 1/2: 1.06% @ -14.6°`，即两个偏小、略微倾斜的标记。*
+
+**节点：**
+
+| 节点 | 作用 |
+|---|---|
+| `BreastSizeControl_EditUtils` | 画布：绘制作为参考的 `_bd` 条件图（黑底 + `#FADBAE` 标记）。面积 = 尺寸，位置 = 在哪，角度 = 倾斜 |
+| `Krea2ModelConfig_EditUtils` | Krea2 模型配置（`model_name="qwen"` 分支、`vae_unit=8`、内置 instruction） |
+| `QwenConfigPreparer_EditUtils` | 把条件图包成参考图：`to_ref`、`ref_main_image`、`ref_longest_edge=1024`、`ref_crop=pad`、`to_vl`、`vl_target_size=384`、`ref_resize_mode=longest_edge` |
+| `EditTextEncode_EditUtils` | 把提示词 + 参考图编码成 conditioning、采样 latent 与 `pad_info` |
+| `Krea2EditApply_EditUtils` | 给模型打补丁以注入参考图潜变量（`ref_pos_match_target`、`ref_kv_cache=1`、`ref_strength=1.0`） |
+
+**接线**（见 [k2 breasts size control.json](workflows/k2%20breasts%20size%20control.json)）：
+
+```
+UNETLoader (krea2_raw_int8_convrot) ──► Krea2EditApply ──► [合并 LoRA: krea2_turbo] ──► [合并 LoRA: breasts_control] ──► KSampler ──► VAEDecode ──► SaveImage
+CLIPLoader (qwen3vl_4b_fp8_scaled, type krea2) ─┐
+VAELoader  (qwen_image_vae) ────────────────────┤
+PrimitiveStringMultiline（画面提示词）──────────┼──► EditTextEncode_EditUtils ──► positive + latent ──► KSampler
+Krea2ModelConfig ───────────────────────────────┤                                    │
+BreastSizeControl ──► QwenConfigPreparer ───────┘                                    └──► ConditioningZeroOut ──► negative
+```
+
+**依赖与设置：**
+
+- `breasts_control_lrzjason_20261015.safetensors` —— 控制 LoRA（强度 1.0），叠加在 `krea2_turbo_lora_rank_64_bf16` 之上。
+- 工作流用 **Comfyui-LoraUtils** 的 `LoadLoraOnly → MergeLoraToModel` 合并这两个 LoRA（[Comfyui-LoraUtils](https://github.com/lrzjason/Comfyui-LoraUtils)）；任何等价的「加载 LoRA + 给模型打补丁」节点对都可以。
+- 模型文件：`krea2_raw_int8_convrot.safetensors`（UNET）、`qwen3vl_4b_fp8_scaled.safetensors`（CLIP，type `krea2`）、`qwen_image_vae.safetensors`（VAE）。
+- 示例采样参数：`euler / simple`、**8 步**、CFG **1.0**、denoise 1.0、固定种子（有 turbo LoRA 才敢用这么短的步数）。
+- 示例提示词**只**描述画面（人物、服装、景别、光线），不含任何尺寸措辞 —— 请保持这一点，否则文字会和参考图争夺「尺寸」这个量。这正是数据集侧的 caption 规则：**画面文字，几何条件图**。
+- 图里还有一个未接出的 `CropWithPadInfo_EditUtils` 与一个 `GetImageSize` 节点，保存链路并不需要它们。
+
+**让标记保持在训练分布内：** 这个 LoRA 就是在该标记样式上训练的，所以请保持黑底、填充 `#FADBAE`（或相近的高亮色）、1~2 个面积代表尺寸的椭圆。画布的预设按钮会把**标记总面积**设到实测的每档中位数 —— 画面占比 `flat 1.49% / small 2.94% / medium 3.22% / large 7.18% / huge 13.95% / gigantic 16.50%` —— 这是最稳妥地落在 LoRA 真正见过的档位上的方式。接了 `image` 时条件图会被强制为目标图的精确尺寸。
+
+> ⚠️ **注意：** 该控制 LoRA 与 Krea2 编辑路径仍在开发中 —— 效果取决于 LoRA 权重与参考强度。
 
 ## 工作流
 
@@ -80,6 +125,7 @@ QwenImage21ModelConfig ──────────────────┴
 - **[Simple Krea2 Depth.json](workflows/Simple%20Krea2%20Depth.json)** - 配合 depth LoRA 的简单 Krea2 编辑工作流。接线 `LoadImage → Krea2ModelConfig_EditUtils → EditTextEncode_EditUtils → Krea2EditApply_EditUtils → KSampler`，通过 `UNETLoader + LoraLoaderModelOnly` 加载模型 —— 参考图潜变量会自动沿 conditioning 链路传递。
   - RunningHub 在线版本：https://www.runninghub.ai/post/2082077636234313729/?inviteCode=rh-v1279
   - Depth LoRA 下载：[Krea2 Depth LoRA (Civitai)](https://civitai.com/models/2815790/krea2-depth-lrzjason-20260729)
+- **[k2 breasts size control.json](workflows/k2%20breasts%20size%20control.json)** - Krea2 胸部尺寸控制：`BreastSizeControl_EditUtils` 在画布上画出 `_bd` 参考图，`QwenConfigPreparer_EditUtils` 把它包成参考图，`Krea2EditApply_EditUtils` 注入，两个合并的 LoRA（`krea2_turbo` + `breasts_control_lrzjason_20261015`）驱动采样。`euler / simple`，8 步，CFG 1.0。LoRA 合并节点需要 [Comfyui-LoraUtils](https://github.com/lrzjason/Comfyui-LoraUtils)。该文件是 **API 格式**导出（另外两个是 UI 图）—— 当前 ComfyUI 前端可以用常规的「加载 / 拖入」路径读取 API JSON，它与上面截图里的图完全一致。
 
 > ⚠️ **注意：** Krea2 编辑支持仍在开发中 —— 节点接口与行为可能发生变化。
 
@@ -176,6 +222,68 @@ QwenImage21ModelConfig ──────────────────┴
 - `mask`：突出显示两张图差异的蒙版
 
 **使用场景：** 对比原图与编辑后的图像，为选择性编辑或重绘生成蒙版。
+
+### AlphaNoiseFilter_EditUtils
+清理 Qwen-Image 2.1 生成图的 alpha 通道。Qwen-Image 2.1 可以生成带透明背景的图，但原始输出通常在透明区域散布着数值很低、肉眼几乎不可见的 alpha 噪点——单独看不明显，却会破坏抠图、合成与基于蒙版的编辑。本节点去除这类噪点，输出干净的 alpha 图与对应蒙版。
+
+**输入：**
+- `image`：输入图（RGBA，如 Qwen-Image 2.1 VAE 的 `VAEDecode` 输出）
+- `mask`：（可选）输入图没有 alpha 通道（RGB）时作为 alpha 来源
+- `alpha_threshold`：低于此值的 alpha 视为低值噪点并裁为 0（0.0-1.0，默认：0.10）
+- `min_area`：删除像素数小于此值的独立 alpha 孤岛（0-65536，默认：100）
+- `feather`：向内羽化渐变带的宽度（像素）——在 matte 边界处完全透明，向内平滑升到完全不透明（0-32，默认：2.0）
+- `invert_mask`：蒙版输出改为 `1 - alpha`（白=透明，ComfyUI 重绘惯例，默认：False）
+
+**输出：**
+- `image`：清理后的 RGBA 图
+- `mask`：alpha 对应的蒙版（默认白=不透明）
+
+**处理流程：** 低值裁剪 → 小孤岛删除 → 向内羽化。**只修改 alpha 通道**——输出的 RGB 与输入完全一致。
+
+**羽化只向内工作，绝不外扩。** 渐变带整条都落在生成器已经标记为主体的区域内，因此羽化不可能让原本透明的像素变可见。实测 `alpha noise.png`：feather 取 0–16 之间任意值时，轮廓外 alpha>0 的像素数恒为 **0**，且任何位置 alpha 都不会超过原始 matte。渐变从边界处完全透明向内单调升到完全不透明：
+
+| feather | 0 px | 1 px | 2 px | 3 px | 4 px | 5 px | 6 px | 8 px |
+|---|---|---|---|---|---|---|---|---|
+| 0（原始 matte） | 0.449 | 0.877 | 0.957 | 0.977 | 0.986 | 0.992 | 0.995 | 0.998 |
+| 2 | 0.020 | 0.493 | 0.951 | — | — | — | — | — |
+| 4 | 0.005 | 0.160 | 0.475 | 0.823 | 0.986 | — | — | — |
+| 8 | 0.001 | 0.044 | 0.149 | 0.314 | 0.510 | 0.686 | 0.842 | 0.997 |
+
+**为什么不能用对称模糊：** 对称高斯会把渐变带推到 matte 之外，而那些像素的 RGB 仍然是生成器留下的背景色（Qwen-Image 2.1 的 VAE 是一片紫色 (152,50,196)）。实测 feather=4 时对称模糊会点亮 **13758** 个原本 alpha=0 的像素，它们的 RGB 均值是 (92,47,102)，在深色背景上就是一圈紫晕；改成向内羽化后紫边量恒为 **0.000**。
+
+**代价：** 渐变带内的 alpha 被压低，轮廓面积因此收缩（feather=2 → −2.79%，feather=4 → −5.27%，feather=8 → −10.13%），细结构（如毛发）在羽化带宽大于自身宽度时会明显变淡——羽化带内侧 2px 范围的平均 alpha 从 0.583（不羽化）降到 0.152（feather=2）。这是「不外扩」的必然代价。
+
+**使用场景：** 把 Qwen-Image 2.1 的 alpha 生成图变成干净的抠图/蒙版：`VAEDecode → AlphaNoiseFilter`，然后保存图片，或用蒙版驱动重绘/编辑节点。
+
+### BreastSizeControl_EditUtils
+在节点内的画布上直接手绘**胸部尺寸控制图（`_bd` 条件图）**：黑底 + 1~2 个实心椭圆标记，默认填充色 `#FADBAE`，标记的**面积**是尺寸旋钮、**位置**是乳房位置。输出与 `E:\images\breasts_size_control` 里现有 `_bd` 条件图**同一契约**——实测 60 张：每张只有 **2 种颜色**（硬边、无抗锯齿），标记是 `box_px` 的**内切椭圆**（IoU 中位 0.988），60/60 的输出尺寸与 `target_size_px` 完全相同。
+
+画布是 **WYSIWYG** 的：你看到的黑底和色块**就是**渲染出的像素（浏览器 `ctx.ellipse` 与节点光栅化用的是同一个内点判定）。几何量以归一化坐标存放在隐藏的 `markers` 输入里，所以改分辨率不会丢画。
+
+**输入：**
+- `width` / `height`：未接 `image` 时的画布尺寸（默认 832x1216）
+- `markers`：画布持有的隐藏 JSON 载荷——用画布编辑，不要手改
+- `antialias`：`False`（默认）与现有 `_bd` 图的 2 色硬边完全一致；`True` 为 4×4 超采样抗锯齿（面积不变）
+- `image`（可选）：接入目标图后，输出被强制为该图的**精确像素尺寸**（batch 取第一帧）——`_bd` 契约要求条件图与目标同尺寸
+
+**输出：**
+- `image`：条件图，`(1, H, W, 3)`
+
+**画布操作：** 空白处拖拽新建标记（最多 2 个）；拖本体移动；拖**上/下/左/右边中点手柄**单独改 `ry`/`rx`（这是把圆拖成椭圆的工具，真实 `_bd` 的 bbox 长宽比中位约 0.91）；拖**角手柄**或在标记上**滚轮**等比缩放（保持正圆）；**Shift** + 拖边手柄等比；拖椭圆上方的**旋转手柄**即可**旋转标记**（`↺ 15°` / `↻ 15°` / 角度输入框 / `0°` 用于精确角度）；**右键**删除；**预设按钮**套用实测档位面积；**取色器**改填充色（默认 `#FADBAE`）；**guide** 勾选框把接入图以 45% 透明度垫在黑底上对位，**绝不进入输出像素**。
+
+**旋转：** 角度单位为度，**正数 = 屏幕上顺时针**（与 `krea2_geom_lab` 约定一致），归一化到 `(-180, 180]`。旋转只改朝向、**不改面积**，所以不影响尺寸档与预设；边/角手柄与命中判定都跟着旋转，拖拽始终沿椭圆自身的轴生效。`angle` 非法时只回退成 0，不会丢掉该标记。
+
+**尺寸档预设**（取数据集分析的实测中位面积，按**总面积**计）：
+
+| flat | small | medium | large | huge | gigantic |
+|---|---|---|---|---|---|
+| 1.49% | 2.94% | 3.22% | 7.18% | 13.95% | 16.50% |
+
+预设作用于**整张图的总面积**并按两标记当前比例分配——若按单标记给面积，两个标记时总面积会翻倍到档位的两倍，与训练分布不符。左右想不一样大，就用边手柄分别拖。
+
+**使用场景：** 制作「改变胸部大小」编辑对的参考图一侧。接入目标图保证尺寸严格一致，一个按钮选好档位，输出直接接进编辑管线的 `_bd` 参考输入。完整可运行的例子（Krea2 + 训练好的控制 LoRA）见 [k2 breasts size control.json](workflows/k2%20breasts%20size%20control.json) —— 参见 [Krea2 胸部尺寸控制](#krea2-胸部尺寸控制)。
+
+**实测：** 六档面积渲染误差 ≤ 0.12%；两标记分离时总面积恰为单标记的 2 倍；重叠时取并集而非相加；旋转在 7 个角度下面积不变，90° 旋转与交换 `rx`/`ry` 完全等价（IoU 1.0000）；用 25 张现有条件图各自的 sidecar 反算几何重渲染，与真实 `_bd.png` 像素的 IoU 中位 **0.9866**、最小 **0.9757**——已达「内切椭圆」模型自身的上限。
 
 ## 安装
 

@@ -5,6 +5,8 @@
 A collection of utility nodes for advanced image editing in ComfyUI, supporting multiple AI models including Qwen, Qwen-Image 2.1, Flux2Klein and Krea2.
 
 ## Update
+20261015 Added **BreastSizeControl_EditUtils** — draw a breast-size control (`_bd`) condition image on the node's own canvas: black background, one or two `#FADBAE` ellipses you can move, shape (circle ⇄ ellipse), **rotate** and colour, with the measured flat/small/medium/large/huge/gigantic areas one button away. The marker's area is the size dial. Working Krea2 example: [k2 breasts size control.json](workflows/k2%20breasts%20size%20control.json).
+20261007 Added AlphaNoiseFilter_EditUtils — clean the alpha channel of Qwen-Image 2.1 alpha generations (clip low-value alpha noise, drop small alpha islands, erode/dilate, then feather) and output a clean RGBA image plus a mask. Feathering works strictly inwards: the gradient band is created inside the matte's own edge, so the silhouette never grows into the transparent background and no background colour can leak out as a halo.
 20260920 Added Qwen-Image 2.1 support (QwenImage21ModelConfig / QwenImage21ConfigPreparer / QwenImage21EditTextEncode / QwenImage21EditApply). 64ch 16x VAE, Qwen3-VL text encoder, vision-slot latent splicing and per-reference ROPE offsets. Example workflow: [edit utils qwen image 2.1 example.json](workflows/edit%20utils%20qwen%20image%202.1%20example.json). Requires ComfyUI with upstream Qwen-Image 2.1 support.
 20260504 Added Longest Edge Image Process, Clear Ref Latents, Save/Load Condition nodes. Fixed no_refs_cond output in Output Extractors.
 20260407 Fixed Extra Height Unit Pad Which Introduce Color Shift
@@ -65,9 +67,52 @@ QwenImage21ModelConfig ──────────────────┴
 
 - Requires a ComfyUI build with upstream Qwen-Image 2.1 support (the `qwen_image21` model); on older builds the model won't load and the EditApply node passes the model through unchanged.
 - The main image's padded latent is the sampling start latent; use `pad_info → CropWithPadInfo_EditUtils` after decode to get the unpadded result (same flow as the Qwen 1.0 path).
+- The 2.1 VAE is RGBA-aware, so generations can carry an alpha channel. The raw alpha usually has faint low-value noise scattered over the transparent region — pipe `VAEDecode → AlphaNoiseFilter_EditUtils` to clean it into a proper cutout plus a mask.
 - `rope_x_offset / rope_y_offset` only take effect with `QwenImage21EditApply_EditUtils` in the graph; with all offsets at zero the model runs its native path (prefix KV cache unaffected).
 - Keep `to_vl` enabled on the Config Preparer — disabling it splices the reference after the text sequence, which is an untrained path.
 - Suggested starting point (as in the example workflow): Euler / Simple, 25 steps, CFG 1.0.
+
+## Krea2 Breast Size Control
+
+A trained control LoRA plus `BreastSizeControl_EditUtils` makes the breast size a **dial you draw**: paint one or two markers on the canvas, and the marker's **area** (its position and angle too) drives the result. The prompt describes only the scene — deliberately **no size words** — because the geometry is meant to come from the reference image alone.
+
+![Krea2 breast size control example](k2%20breasts%20size%20control.png)
+
+*The example graph and its result, produced with [k2 breasts size control.json](workflows/k2%20breasts%20size%20control.json). The canvas in the screenshot reads `832x1216 - total 2.36% (small) - marker 1/2: 1.06% @ -14.6°`, i.e. two small, slightly tilted markers.*
+
+**Nodes:**
+
+| Node | Purpose |
+|---|---|
+| `BreastSizeControl_EditUtils` | The canvas: draws the `_bd` condition image (black + `#FADBAE` markers) that acts as the reference. Marker area = size, position = where, angle = tilt. |
+| `Krea2ModelConfig_EditUtils` | Krea2 model config (`model_name="qwen"` route, `vae_unit=8`, built-in instruction). |
+| `QwenConfigPreparer_EditUtils` | Wraps the condition image as the reference: `to_ref`, `ref_main_image`, `ref_longest_edge=1024`, `ref_crop=pad`, `to_vl`, `vl_target_size=384`, `ref_resize_mode=longest_edge`. |
+| `EditTextEncode_EditUtils` | Encodes prompt + reference into the conditioning, the sampling latent and `pad_info`. |
+| `Krea2EditApply_EditUtils` | Patches the model so the reference latent is injected (`ref_pos_match_target`, `ref_kv_cache=1`, `ref_strength=1.0`). |
+
+**Wiring** (see [k2 breasts size control.json](workflows/k2%20breasts%20size%20control.json)):
+
+```
+UNETLoader (krea2_raw_int8_convrot) ──► Krea2EditApply ──► [Merge LoRA: krea2_turbo] ──► [Merge LoRA: breasts_control] ──► KSampler ──► VAEDecode ──► SaveImage
+CLIPLoader (qwen3vl_4b_fp8_scaled, type krea2) ─┐
+VAELoader  (qwen_image_vae) ────────────────────┤
+PrimitiveStringMultiline (scene prompt) ────────┼──► EditTextEncode_EditUtils ──► positive + latent ──► KSampler
+Krea2ModelConfig ───────────────────────────────┤                                    │
+BreastSizeControl ──► QwenConfigPreparer ───────┘                                    └──► ConditioningZeroOut ──► negative
+```
+
+**Requirements and settings:**
+
+- `breasts_control_lrzjason_20261015.safetensors` — the control LoRA (strength 1.0), merged on top of `krea2_turbo_lora_rank_64_bf16`.
+- The graph merges both LoRAs with **Comfyui-LoraUtils**' `LoadLoraOnly → MergeLoraToModel` ([Comfyui-LoraUtils](https://github.com/lrzjason/Comfyui-LoraUtils)); any equivalent "load LoRA + patch model" pair works.
+- Model files: `krea2_raw_int8_convrot.safetensors` (UNET), `qwen3vl_4b_fp8_scaled.safetensors` (CLIP, type `krea2`), `qwen_image_vae.safetensors` (VAE).
+- Sampler in the example: `euler / simple`, **8 steps**, CFG **1.0**, denoise 1.0, fixed seed (the turbo LoRA allows the short schedule).
+- The prompt in the example describes **only** the scene (subject, clothing, framing, light) and contains no size wording — keep it that way, or the text will compete with the reference image for the size. This is the caption rule from the dataset side: scene in the text, geometry in the condition image.
+- The workflow graph also carries an unused `CropWithPadInfo_EditUtils` and a `GetImageSize` node; neither is required for the save path.
+
+**Keeping the marker in-distribution:** the LoRA was trained on this exact marker style, so keep the background black, the fill at `#FADBAE` (or a similar bright colour), and one or two ellipses whose area is the size. The canvas preset buttons set the **total** marker area to the measured per-class medians — `flat 1.49% / small 2.94% / medium 3.22% / large 7.18% / huge 13.95% / gigantic 16.50%` of the frame — which is the safest way to land on a class the LoRA has actually seen. The condition image is forced to the target's pixel size when you connect an `image`.
+
+> ⚠️ **Note:** this control LoRA and the Krea2 edit path are still in development — results depend on the LoRA checkpoint and the reference strength.
 
 ## Workflows
 
@@ -80,6 +125,7 @@ Example workflows are available in the [workflows](workflows/) directory:
 - **[Simple Krea2 Depth.json](workflows/Simple%20Krea2%20Depth.json)** - Simple Krea2 editing workflow with a depth LoRA. Wires `LoadImage → Krea2ModelConfig_EditUtils → EditTextEncode_EditUtils → Krea2EditApply_EditUtils → KSampler`, loading the model via `UNETLoader + LoraLoaderModelOnly` — the reference latent flows through the conditioning chain automatically.
   - Online version on RunningHub: https://www.runninghub.ai/post/2082077636234313729/?inviteCode=rh-v1279
   - Depth LoRA download: [Krea2 Depth LoRA (Civitai)](https://civitai.com/models/2815790/krea2-depth-lrzjason-20260729)
+- **[k2 breasts size control.json](workflows/k2%20breasts%20size%20control.json)** - Krea2 breast-size control: `BreastSizeControl_EditUtils` paints the `_bd` reference on its canvas, `QwenConfigPreparer_EditUtils` wraps it as the reference, `Krea2EditApply_EditUtils` injects it, and two merged LoRAs (`krea2_turbo` + `breasts_control_lrzjason_20261015`) drive the sampling. `euler / simple`, 8 steps, CFG 1.0. Needs [Comfyui-LoraUtils](https://github.com/lrzjason/Comfyui-LoraUtils) for the LoRA merge nodes. This file is an **API-format** export (the other two are UI graphs) — current ComfyUI frontends load API JSON through the normal Load / drag-and-drop path, and it is the same graph shown in the screenshot above.
 
 > ⚠️ **Note:** Krea2 edit support is still in development — node interfaces and behavior may change.
 
@@ -177,6 +223,68 @@ A utility node that generates a mask highlighting the differences between two im
 - `mask`: A mask highlighting differences between the two images
 
 **Use Case:** Compare original and edited images to create a mask for selective editing or inpainting.
+
+### AlphaNoiseFilter_EditUtils
+Cleans the alpha channel of a Qwen-Image 2.1 alpha generation. Qwen-Image 2.1 can output images with an alpha channel, but the raw result usually carries faint, low-value alpha noise scattered across the transparent region — barely visible on its own, but it breaks compositing, cutouts and mask-driven editing. This node removes that noise and outputs a clean RGBA image together with its mask.
+
+**Inputs:**
+- `image`: Input image (RGBA, e.g. the `VAEDecode` output of the Qwen-Image 2.1 VAE)
+- `mask`: (optional) Used as the alpha when the input image has no alpha channel (RGB input)
+- `alpha_threshold`: Alpha below this is treated as low-value noise and clipped to 0 (0.0-1.0, default: 0.10)
+- `min_area`: Drop isolated alpha islands smaller than this many pixels (0-65536, default: 100)
+- `feather`: Width in pixels of the gradient band created **inside** the edge — fully transparent at the matte boundary, rising smoothly to fully opaque `feather` px inwards (0-32, default: 2.0)
+- `invert_mask`: Output `1 - alpha` as the mask — white = transparent, the ComfyUI inpaint convention (default: False)
+
+**Outputs:**
+- `image`: The cleaned RGBA image
+- `mask`: The alpha as a mask (white = opaque by default)
+
+**Pipeline:** low-value clip → small-island removal → inward feather. **Only the alpha channel is modified** — the output RGB is byte-identical to the input.
+
+**Feathering only works inwards — it never grows the matte.** The gradient band lies entirely inside the region the generator already marked as subject, so feathering can never make an originally-transparent pixel visible. Measured on `alpha noise.png`: at every feather width from 0 to 16 the number of pixels with alpha > 0 outside the matte is **0**, and alpha never exceeds the original matte anywhere. The gradient starts fully transparent on the boundary and rises monotonically inwards:
+
+| feather | 0 px | 1 px | 2 px | 3 px | 4 px | 5 px | 6 px | 8 px |
+|---|---|---|---|---|---|---|---|---|
+| 0 (raw matte) | 0.449 | 0.877 | 0.957 | 0.977 | 0.986 | 0.992 | 0.995 | 0.998 |
+| 2 | 0.020 | 0.493 | 0.951 | — | — | — | — | — |
+| 4 | 0.005 | 0.160 | 0.475 | 0.823 | 0.986 | — | — | — |
+| 8 | 0.001 | 0.044 | 0.149 | 0.314 | 0.510 | 0.686 | 0.842 | 0.997 |
+
+**Why not a symmetric blur?** A symmetric Gaussian pushes the gradient band *outside* the matte, and those pixels still carry the generator's raw background colour (a purple (152,50,196) wash for the Qwen-Image 2.1 VAE). At feather=4 a symmetric blur lights up **13,758** pixels that were alpha=0, whose mean RGB is (92,47,102) — a purple halo on dark backgrounds. Inward feathering keeps the halo at exactly **0.000**.
+
+**What it costs:** alpha inside the band is reduced, so the silhouette contracts (feather=2 → −2.79%, feather=4 → −5.27%, feather=8 → −10.13%), and thin structures such as fur fade once the band is wider than they are — mean alpha in the 2 px band just inside the edge drops from 0.583 (no feather) to 0.152 at feather=2. That is the unavoidable price of not growing the matte.
+
+**Use Case:** Turn a Qwen-Image 2.1 alpha generation into a clean cutout/mask: feed `VAEDecode → AlphaNoiseFilter`, then save the image or drive inpainting/editing nodes with the mask.
+
+### BreastSizeControl_EditUtils
+Draw a **breast-size control image (`_bd` condition image)** directly on the node's canvas: black background plus one or two filled ellipses, `#FADBAE` fill by default, where the marker's **area** is the size dial and its **position** is where the breasts sit. The output follows the exact contract of the existing `_bd` condition images in `E:\images\breasts_size_control` — measured on 60 of them: every image carries exactly **2 colours** (hard edges, no antialiasing), the marker is an **ellipse inscribed in `box_px`** (IoU median 0.988), and the file size equals `target_size_px` in 60/60.
+
+The canvas is **WYSIWYG** — the black background and the coloured markers you see *are* the rendered pixels (the browser's `ctx.ellipse` and the node's rasterizer share the same inside test). Geometry is stored normalised inside a hidden `markers` widget, so the drawing survives a resolution change.
+
+**Inputs:**
+- `width` / `height`: canvas size when no image is connected (default 832x1216)
+- `markers`: the hidden JSON payload the canvas owns — edit it by drawing, not by hand
+- `antialias`: `False` (default) reproduces the existing two-colour `_bd` look exactly; `True` supersamples the edges 4x4 without changing the area
+- `image` (optional): a target image forces the output to that image's **exact pixel size** (batch: the first frame decides), which is what the `_bd` contract requires
+
+**Output:**
+- `image`: the condition image, `(1, H, W, 3)`
+
+**Canvas tools:** drag empty space to create a marker (max two); drag the body to move it; drag the **N/S/E/W edge handles** to change `ry`/`rx` independently (this is how a circle becomes an ellipse, matching the real `_bd` aspect of ~0.91); drag a **corner handle** or use the **wheel** to scale uniformly (stays a circle); **Shift** + edge drag for uniform; drag the **rotation handle** above the ellipse to **rotate it** (`↺ 15°` / `↻ 15°` / a degree box / `0°` are there for exact angles); **right click** to delete; the **preset buttons** set the measured class areas; the **colour picker** sets the fill (`#FADBAE` default); the **guide** checkbox dims the connected image underneath for placement and never touches the output.
+
+**Rotating:** the angle is in degrees, **positive = clockwise on screen** (the same convention as `krea2_geom_lab`), normalised to `(-180, 180]`. Rotation only changes the orientation — the **area is untouched**, so it never disturbs the size class or the presets. The edge/corner handles and hit-testing follow the rotation, so a drag always acts along the ellipse's own axes. A malformed `angle` falls back to 0 instead of discarding the marker.
+
+**Size-class presets** (measured medians from the dataset analysis, as **total** marker area):
+
+| flat | small | medium | large | huge | gigantic |
+|---|---|---|---|---|---|
+| 1.49% | 2.94% | 3.22% | 7.18% | 13.95% | 16.50% |
+
+A preset rescales the **whole drawing** to the class area and keeps the two markers' relative sizes — giving each marker the full class area would double the total whenever two markers are present, which is off-distribution. For an asymmetric pair, drag the edge handles instead.
+
+**Use Case:** author the reference side of a "change the breast size" edit pair. Feed it a target image for an exactly matching size, set the class with one button, and feed the result to the `_bd` reference input of your edit pipeline. A complete working example (Krea2 + a trained control LoRA) is in [k2 breasts size control.json](workflows/k2%20breasts%20size%20control.json) — see [Krea2 Breast Size Control](#krea2-breast-size-control).
+
+**Verified:** six class areas render within 0.12% of their target; two separated markers are exactly 2x one marker; overlapping markers merge (union, not sum); rotation preserves the area across seven angles and a 90° rotation is exactly equivalent to swapping `rx`/`ry` (IoU 1.0000); re-rendering 25 existing condition images from their own sidecars reaches **IoU median 0.9866 / min 0.9757** against the real `_bd.png` pixels — the ceiling of the inscribed-ellipse model itself.
 
 ## Installation
 
