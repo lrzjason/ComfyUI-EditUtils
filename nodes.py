@@ -230,15 +230,21 @@ FLUX3_BBOX_GRID = 1000.0
 
 
 def parse_flux3_bbox(value, field="bbox"):
-    """Coerce a bbox to the FLUX.3 [top, left, bottom, right] int contract.
+    """Parse a bbox to the FLUX.3 [top, left, bottom, right] int contract.
 
-    Accepts a list/tuple of 4 numbers, or the string form the canvas writes
-    ("[150, 150, 850, 850]"). Values are clamped to 0-1000 and rounded, and the
-    box is normalized so top <= bottom and left <= right (a box dragged
-    bottom-right to top-left must not produce an inverted row the model would
-    read as empty). Returns None when the value is null/"null"/absent/invalid —
-    which is meaningful in the edit table (src_bbox null = New row, tgt_bbox
-    null = Remove row).
+    Accepts a list/tuple of 4 numbers, the string form the canvas writes
+    ("[150, 150, 850, 850]"), "t,l,b,r" without brackets, or {"t","l","b","r"}.
+
+    Returns None **only** for an explicit null (None, "" or "null"). That is
+    meaningful in the edit table (src_bbox null = New row, tgt_bbox null =
+    Remove row), so it must never be produced from a malformed value.
+
+    Anything else that is not a valid box raises ValueError instead of turning
+    into null: the wrong number of values, non-numeric or non-finite values,
+    fractional values (the grid is integers 0-1000, 0-1 fractions are not
+    converted), values outside 0-1000 (not clamped), and boxes with
+    top >= bottom or left >= right. The canvas already writes ordered integer
+    boxes on the grid, so its output is unaffected.
     """
     if value is None:
         return None
@@ -253,41 +259,44 @@ def parse_flux3_bbox(value, field="bbox"):
             try:
                 value = [float(part) for part in text.replace("[", "").replace("]", "").split(",")]
             except Exception:
-                print(f"Flux3Klein bbox: could not parse {field}={text!r}, treating as null")
-                return None
+                raise ValueError(f"Flux3Klein bbox: could not parse {field}={text!r}; expected [top, left, bottom, right] or null") from None
     if isinstance(value, dict):
         # tolerate {"t":..,"l":..,"b":..,"r":..}
         try:
             value = [value["t"], value["l"], value["b"], value["r"]]
         except Exception:
-            print(f"Flux3Klein bbox: unusable dict for {field}, treating as null")
-            return None
+            raise ValueError(f"Flux3Klein bbox: {field} object needs the keys t, l, b, r, got {value!r}") from None
     if not isinstance(value, (list, tuple)) or len(value) != 4:
-        print(f"Flux3Klein bbox: {field} needs exactly 4 numbers, got {value!r}")
-        return None
-    try:
-        nums = [float(v) for v in value]
-    except Exception:
-        print(f"Flux3Klein bbox: {field} has a non-numeric value in {value!r}")
-        return None
-    if any(math.isnan(n) for n in nums):
-        return None
-
-    t, l, b, r = nums
-    # normalize ordering, then clamp to the grid and round to integers
-    t, b = min(t, b), max(t, b)
-    l, r = min(l, r), max(l, r)
-    box = [
-        int(round(max(0.0, min(FLUX3_BBOX_GRID, t)))),
-        int(round(max(0.0, min(FLUX3_BBOX_GRID, l)))),
-        int(round(max(0.0, min(FLUX3_BBOX_GRID, b)))),
-        int(round(max(0.0, min(FLUX3_BBOX_GRID, r)))),
-    ]
-    if box[0] == box[2] or box[1] == box[3]:
-        # a zero-area box cannot be a layout target
-        print(f"Flux3Klein bbox: {field} {box} has zero area, treating as null")
-        return None
+        raise ValueError(f"Flux3Klein bbox: {field} needs exactly 4 numbers [top, left, bottom, right], got {value!r}")
+    box = []
+    for v in value:
+        try:
+            if isinstance(v, bool):
+                raise TypeError
+            n = float(v)
+        except (TypeError, ValueError):
+            raise ValueError(f"Flux3Klein bbox: {field} has a non-numeric value in {value!r}") from None
+        if not math.isfinite(n):
+            raise ValueError(f"Flux3Klein bbox: {field} has a non-finite value in {value!r}")
+        if n != int(n):
+            raise ValueError(
+                f"Flux3Klein bbox: {field} {value!r} has a fractional value; boxes are integers on the 0-{int(FLUX3_BBOX_GRID)} grid "
+                "(0-1 fractions are not converted)"
+            )
+        if n < 0 or n > FLUX3_BBOX_GRID:
+            raise ValueError(f"Flux3Klein bbox: {field} {value!r} is outside the 0-{int(FLUX3_BBOX_GRID)} grid")
+        box.append(int(n))
+    if box[0] >= box[2] or box[1] >= box[3]:
+        raise ValueError(f"Flux3Klein bbox: {field} {box} is empty or inverted; need top < bottom and left < right")
     return box
+
+
+def _parse_row_bbox(element_id, value, field):
+    """parse_flux3_bbox() with the row id in the error, so a bad row can be found."""
+    try:
+        return parse_flux3_bbox(value, field)
+    except ValueError as e:
+        raise ValueError(f"Flux3Klein bbox rows: row {element_id!r}: {e}") from e
 
 
 def _flux3_clean_desc(value):
@@ -362,14 +371,14 @@ def parse_flux3_bbox_payload(payload, width=None, height=None):
                 from_ref = None
 
         if mode == "generation":
-            bbox = parse_flux3_bbox(raw.get("bbox", raw.get("tgt_bbox")), "bbox")
+            bbox = _parse_row_bbox(element_id, raw.get("bbox", raw.get("tgt_bbox")), "bbox")
             if bbox is None:
                 print(f"Flux3Klein bbox: generation row {element_id!r} has no usable bbox, skipping")
                 continue
             row = {"id": element_id, "bbox": bbox, "desc": desc}
         else:
-            src = parse_flux3_bbox(raw.get("src_bbox"), "src_bbox")
-            tgt = parse_flux3_bbox(raw.get("tgt_bbox", raw.get("bbox")), "tgt_bbox")
+            src = _parse_row_bbox(element_id, raw.get("src_bbox"), "src_bbox")
+            tgt = _parse_row_bbox(element_id, raw.get("tgt_bbox", raw.get("bbox")), "tgt_bbox")
             # A New row generates the element: no source, only a target.
             if from_ref is None:
                 src = None
