@@ -5,7 +5,10 @@ on:
     branches:
       - main
     paths:
-      - "docs/**"
+      - "index.html"
+      - "breast-size-control.html"
+      - "breast-size-control.md"
+      - "assets/**"
       - "images/**"
       - "workflows/**"
       - ".github/workflows/pages.yml"
