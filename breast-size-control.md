@@ -1,12 +1,12 @@
-# Breast Size Control LoRA (Krea2)
+﻿# Breast Size Control LoRA (Krea2)
 
 **Draw the size. Don't write it.**
 
 A Krea2 control LoRA that makes breast size a **dial you paint**: one or two filled ellipses on a black canvas, where the marker's **area** (plus its position and angle) drives the result. The caption stays a scene description, with no size words at all.
 
-![Krea2 breast size control example](../images/k2%20breasts%20size%20control.png)
+![Krea2 breast size control example](images/k2%20breasts%20size%20control.png)
 
-*The graph and its result, produced with [k2 breasts size control.json](../workflows/k2%20breasts%20size%20control.json). The canvas reads `832x1216 - total 2.36% (small) - marker 1/2: 1.06% @ -14.6°`, i.e. two small, slightly tilted markers.*
+*The graph and its result, produced with [k2 breasts size control.json](workflows/k2%20breasts%20size%20control.json). The canvas reads `832x1216 - total 2.36% (small) - marker 1/2: 1.06% @ -14.6掳`, i.e. two small, slightly tilted markers.*
 
 ---
 
@@ -100,8 +100,8 @@ Continued training at higher resolution, focusing on detail reconstruction at th
 
 ## Usage
 
-> ⚠️ **This LoRA must be used together with the EditUtils plugin:**
-> 👉 https://github.com/lrzjason/ComfyUI-EditUtils
+> 鈿狅笍 **This LoRA must be used together with the EditUtils plugin:**
+> 馃憠 https://github.com/lrzjason/ComfyUI-EditUtils
 
 1. **Install the ComfyUI-EditUtils plugin**, plus [Comfyui-LoraUtils](https://github.com/lrzjason/Comfyui-LoraUtils) for the LoRA merge nodes used in the example.
 2. **Load this LoRA** in your workflow: `breasts_control_lrzjason_20261015.safetensors`, strength **1.0**, merged on top of the Krea2 turbo LoRA.
@@ -112,12 +112,9 @@ Continued training at higher resolution, focusing on detail reconstruction at th
 ### Wiring
 
 ```
-UNETLoader (krea2_raw_int8_convrot) ──► Krea2EditApply ──► [Merge LoRA: krea2_turbo] ──► [Merge LoRA: breasts_control] ──► KSampler ──► VAEDecode ──► SaveImage
-CLIPLoader (qwen3vl_4b_fp8_scaled, type krea2) ┐
-VAELoader  (qwen_image_vae) ───────────────────┤
-PrimitiveStringMultiline (scene prompt) ───────┼──► EditTextEncode_EditUtils ──► positive + latent ──► KSampler
-Krea2ModelConfig ──────────────────────────────┤                                    │
-BreastSizeControl ──► QwenConfigPreparer ──────┘                                    └──► ConditioningZeroOut ──► negative
+UNETLoader (krea2_raw_int8_convrot) 鈹€鈹€鈻?Krea2EditApply 鈹€鈹€鈻?[Merge LoRA: krea2_turbo] 鈹€鈹€鈻?[Merge LoRA: breasts_control] 鈹€鈹€鈻?KSampler 鈹€鈹€鈻?VAEDecode 鈹€鈹€鈻?SaveImage
+CLIPLoader (qwen3vl_4b_fp8_scaled, type krea2) 鈹?VAELoader  (qwen_image_vae) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?PrimitiveStringMultiline (scene prompt) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹尖攢鈹€鈻?EditTextEncode_EditUtils 鈹€鈹€鈻?positive + latent 鈹€鈹€鈻?KSampler
+Krea2ModelConfig 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?                                   鈹?BreastSizeControl 鈹€鈹€鈻?QwenConfigPreparer 鈹€鈹€鈹€鈹€鈹€鈹€鈹?                                   鈹斺攢鈹€鈻?ConditioningZeroOut 鈹€鈹€鈻?negative
 ```
 
 **Nodes:**
@@ -146,7 +143,7 @@ Drag empty space to create a marker (max two). Drag the body to move it. Drag th
 - **Will not work as intended without the EditUtils plugin.**
 - **Works best with long, descriptive scene captions**, consistent with the dataset side, where captions were written scene-only.
 - **Overlapping markers merge by union**, so two crossing ellipses are not twice the size.
-- ⚠️ This control LoRA and the Krea2 edit path are **still in development**, and results depend on the LoRA checkpoint and `ref_strength`.
+- 鈿狅笍 This control LoRA and the Krea2 edit path are **still in development**, and results depend on the LoRA checkpoint and `ref_strength`.
 
 ---
 
@@ -156,14 +153,15 @@ Drag empty space to create a marker (max two). Drag the body to move it. Drag th
 
 ---
 
-## 📬 Contact
+## 馃摤 Contact
 
-- **𝕏 Twitter:** [@Lrzjason](https://x.com/Lrzjason)
-- **📧 Email:** lrzjason@gmail.com
-- **💬 QQ Group:** 866612947
-- **💬 WeChat ID:** fkdeai
-- **🎨 CivitAI:** [xiaozhijason](https://civitai.com/user/xiaozhijason)
+- **饾晱 Twitter:** [@Lrzjason](https://x.com/Lrzjason)
+- **馃摟 Email:** lrzjason@gmail.com
+- **馃挰 QQ Group:** 866612947
+- **馃挰 WeChat ID:** fkdeai
+- **馃帹 CivitAI:** [xiaozhijason](https://civitai.com/user/xiaozhijason)
 
 ---
 
 *Intended for responsible, adult-only creative work involving adult subjects.*
+

@@ -6,8 +6,7 @@ on:
       - main
     paths:
       - "index.html"
-      - "breast-size-control.html"
-      - "breast-size-control.md"
+      - "*.md"
       - "assets/**"
       - "images/**"
       - "workflows/**"
