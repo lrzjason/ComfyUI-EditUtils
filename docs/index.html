@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EditUtils Blog - ComfyUI editing utilities and LoRAs</title>
+<meta name="description" content="Field notes for ComfyUI-EditUtils: control LoRAs and editing utilities for Krea2, Qwen-Image 2.1 and FLUX.3 Klein.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="EditUtils Blog">
+<meta property="og:description" content="Control LoRAs and editing utilities for ComfyUI: Krea2, Qwen-Image 2.1, FLUX.3 Klein.">
+<link rel="preconnect" href="https://api.fontshare.com">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@500,700,800,900&f[]=satoshi@400,500,700&display=swap">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5.0.8/400.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5.0.8/500.css">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-in">
+    <a class="brand" href="index.html">EDITUTILS<span class="dot">.</span>BLOG</a>
+    <div class="nav-links">
+      <a href="breast-size-control.html">Breast size control</a>
+      <a href="https://github.com/lrzjason/ComfyUI-EditUtils" target="_blank" rel="noopener">Plugin</a>
+      <a href="https://huggingface.co/lrzjason/Krea2-Lora-Collection/tree/main/loras" target="_blank" rel="noopener">LoRAs</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="hero-in">
+    <div>
+      <p class="eyebrow">ComfyUI-EditUtils &middot; field notes</p>
+      <h1>Control LoRAs that move a variable <em>out of the prompt</em>.</h1>
+      <p class="sub">Depth maps, marker geometry, bounding boxes: one variable per condition image, so the caption stays a scene description.</p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="breast-size-control.html">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h13"/><path d="m12.5 6 6 6-6 6"/></svg>
+          Read the latest post
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/lrzjason/ComfyUI-EditUtils" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="19" r="2.5"/><path d="M12 16.5v-3"/><path d="M6 8.5v1.5a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V8.5"/></svg>
+          Browse the plugin
+        </a>
+      </div>
+    </div>
+    <div class="hero-mark" aria-hidden="true">
+      <span class="hm-frame"></span>
+      <span class="hm-marker"></span>
+      <span class="hm-cap">marker area = the value</span>
+    </div>
+  </div>
+</header>
+
+<main>
+
+<section>
+  <div class="wrap">
+    <div class="section-head rv">
+      <p class="eyebrow">Posts</p>
+      <h2>What is published here</h2>
+    </div>
+
+    <article class="post rv">
+      <div class="post-body">
+        <p class="eyebrow accent">Krea2 &middot; 2026-10-15 &middot; control LoRA</p>
+        <h3>Breast size control: draw the size, don't write it</h3>
+        <p>A marker's <b>area</b> is the size dial, its position is where, its angle is tilt. Six measured classes from <code>flat</code> to <code>gigantic</code>, a scene-only caption rule, and the exact wiring for Krea2.</p>
+        <p class="meta">Control LoRA &middot; ComfyUI-EditUtils + Comfyui-LoraUtils &middot; 8 steps, CFG 1.0</p>
+        <a class="btn btn-primary" href="breast-size-control.html">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h13"/><path d="m12.5 6 6 6-6 6"/></svg>
+          Read the post
+        </a>
+      </div>
+      <a class="post-shot" href="breast-size-control.html" aria-label="Read the breast size control post">
+        <img src="../images/k2%20breasts%20size%20control.png" alt="ComfyUI graph for Krea2 breast size control and its generated result" loading="lazy">
+      </a>
+    </article>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="section-head rv">
+      <p class="eyebrow">Get the files</p>
+      <h2>Four links, in the order you need them</h2>
+    </div>
+
+    <div class="grid-4 rv">
+      <a class="card" href="https://github.com/lrzjason/ComfyUI-EditUtils" target="_blank" rel="noopener">
+        <span class="card-k">01 / Plugin</span>
+        <span class="card-t">ComfyUI-EditUtils</span>
+        <span class="card-d">Required by every post here. Nodes for Krea2, Qwen-Image 2.1 and FLUX.3 Klein.</span>
+      </a>
+      <a class="card" href="https://huggingface.co/lrzjason/Krea2-Lora-Collection/tree/main/loras" target="_blank" rel="noopener">
+        <span class="card-k">02 / Weights</span>
+        <span class="card-t">Krea2 LoRA collection</span>
+        <span class="card-d">On Hugging Face. The breast-size control LoRA lives at <code>breasts_control_lrzjason_20261015.safetensors</code>.</span>
+      </a>
+      <a class="card" href="../workflows/k2%20breasts%20size%20control.json" download>
+        <span class="card-k">03 / Graph</span>
+        <span class="card-t">The workflow JSON</span>
+        <span class="card-d">The Krea2 graph from the post. Needs Comfyui-LoraUtils for the LoRA merge nodes.</span>
+      </a>
+      <a class="card" href="https://www.runninghub.ai/post/2082077636234313729/?inviteCode=rh-v1279" target="_blank" rel="noopener">
+        <span class="card-k">04 / Hosted</span>
+        <span class="card-t">Run it on RunningHub</span>
+        <span class="card-d">The same graph in the browser, no local install.</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<section class="final">
+  <div class="wrap">
+    <div class="final-grid">
+      <div class="rv">
+        <p class="eyebrow">Contact</p>
+        <h2 style="margin-top:.9rem">Questions, or a result worth showing</h2>
+        <p class="lede" style="max-width:44ch">Issues and workflow questions are best on GitHub. For everything else, the links on the right all reach me.</p>
+        <p style="margin-top:1.5rem;font-family:var(--mono);font-size:11px;color:var(--fg-3);letter-spacing:.04em">Intended for responsible, adult-only creative work involving adult subjects.</p>
+      </div>
+      <div class="rv">
+        <ul class="links">
+          <li><span class="k">Twitter / X</span><a href="https://x.com/Lrzjason" target="_blank" rel="noopener">@Lrzjason</a></li>
+          <li><span class="k">Email</span><a href="mailto:lrzjason@gmail.com">lrzjason@gmail.com</a></li>
+          <li><span class="k">QQ Group</span><span style="color:var(--fg)">866612947</span></li>
+          <li><span class="k">WeChat ID</span><span style="color:var(--fg)">fkdeai</span></li>
+          <li><span class="k">CivitAI</span><a href="https://civitai.com/user/xiaozhijason" target="_blank" rel="noopener">xiaozhijason</a></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>ComfyUI-EditUtils &middot; EditUtils Blog</p>
+    <p><a href="https://github.com/lrzjason/ComfyUI-EditUtils" target="_blank" rel="noopener" style="color:var(--fg-2);text-decoration:none">github.com/lrzjason/ComfyUI-EditUtils</a></p>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>

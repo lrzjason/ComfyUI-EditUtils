@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Breast Size Control LoRA (Krea2) - EditUtils</title>
+<meta name="description" content="A Krea2 control LoRA that makes breast size a dial you draw: the marker area on a black condition image is the value, and the caption stays a scene description.">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Breast Size Control LoRA (Krea2) - draw the size, don't write it">
+<meta property="og:description" content="A Krea2 control LoRA that makes breast size a dial you draw. The marker area on a black condition image is the value.">
+<meta property="og:image" content="../images/k2 breasts size control.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preconnect" href="https://api.fontshare.com">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@500,700,800,900&f[]=satoshi@400,500,700&display=swap">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5.0.8/400.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5.0.8/500.css">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-in">
+    <a class="brand" href="index.html">EDITUTILS<span class="dot">.</span>BLOG</a>
+    <div class="nav-links">
+      <a href="#dial">The dial</a>
+      <a href="#training">Training</a>
+      <a href="#usage">Usage</a>
+      <a href="#notes">Notes</a>
+      <a href="#workflow">Workflow</a>
+      <a href="#contact">Contact</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="hero-in">
+    <div>
+      <p class="eyebrow">Breast Size Control LoRA for Krea2 &middot; released 2026-10-15</p>
+      <h1>Draw the size.<br><em>Don't write it.</em></h1>
+      <p class="sub">A Krea2 control LoRA that makes breast size a dial you paint. The marker area is the value.</p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="https://huggingface.co/lrzjason/Krea2-Lora-Collection/tree/main/loras" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 11 5 5 5-5"/><path d="M4 20h16"/></svg>
+          Download the LoRA
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/lrzjason/ComfyUI-EditUtils" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="19" r="2.5"/><path d="M12 16.5v-3"/><path d="M6 8.5v1.5a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V8.5"/></svg>
+          Get EditUtils
+        </a>
+      </div>
+    </div>
+    <figure class="rv">
+      <div class="shot">
+        <img src="../images/k2%20breasts%20size%20control.png" alt="ComfyUI graph for Krea2 breast size control and its generated result" loading="eager">
+      </div>
+      <figcaption><b>Left:</b> the graph, <b>right:</b> the result. Canvas reads <span class="accent">832x1216 - total 2.36% (small) - marker 1/2: 1.06% @ -14.6&deg;</span>, i.e. two small, slightly tilted markers.</figcaption>
+    </figure>
+  </div>
+</header>
+
+<main>
+
+<!-- ============ DIAL ============ -->
+<section id="dial">
+  <div class="wrap">
+    <div class="section-head rv">
+      <p class="eyebrow">Introduction</p>
+      <h2>Size in the text is the wrong place for size</h2>
+      <p class="lede">Most attempts at this problem put the size in the prompt: <code>large breasts</code>, <code>huge bust</code>, and so on. That approach fails in three structural ways.</p>
+    </div>
+
+    <div class="split">
+      <div class="prose rv">
+        <ol>
+          <li><b>The words leak into everything else.</b> A caption heavy on size vocabulary drags the whole composition with it: body type, clothing fit, framing, even the subject's apparent age.</li>
+          <li><b>The scale is not calibrated.</b> "Large" means something different in every checkpoint and every prompt.</li>
+          <li><b>It cannot be continuous.</b> Text gives you a few coarse buckets, not a value you nudge.</li>
+        </ol>
+        <p>This LoRA moves the control out of the text and into <b>geometry</b>. The size lives in a condition image: a black frame with one or two <code>#FADBAE</code> markers, where the marker's <b>area fraction</b> is the dial. The caption is then free to describe only the scene, and the model reads the geometry separately from the language.</p>
+        <p>The practical result is that <b>size becomes a number you can measure and repeat</b>, without ever typing a size word.</p>
+      </div>
+
+      <div class="panel rv">
+        <div class="panel-head"><span>What the marker encodes</span><span class="accent">_bd</span></div>
+        <table>
+          <thead><tr><th>You change</th><th>It controls</th></tr></thead>
+          <tbody>
+            <tr><td class="k">Marker area (% of frame)</td><td>Size class, the dial</td></tr>
+            <tr><td class="k">Marker position</td><td>Where it sits in frame</td></tr>
+            <tr><td class="k">Marker angle</td><td>Tilt</td></tr>
+            <tr><td class="k">Marker count, 1 or 2</td><td>Single marker or pair</td></tr>
+            <tr><td class="k">Marker shape</td><td>Circle or ellipse aspect</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ CLASSES ============ -->
+<section id="classes">
+  <div class="wrap">
+    <div class="section-head rv">
+      <p class="eyebrow">Calibration</p>
+      <h2>Six classes, measured rather than guessed</h2>
+      <p class="lede">The boundaries come from a labelled dataset: the per-class <b>median total marker area</b> as a fraction of the frame. Those six numbers are exactly the canvas preset buttons, so one click lands on a class the LoRA has actually seen.</p>
+    </div>
+
+    <div class="diagram">
+      <figure class="rv">
+        <div class="canvas" aria-label="Schematic of the marker canvas: black frame, two light ellipses, with area, position and angle annotated">
+          <span class="frame"></span>
+          <span class="marker m1"></span>
+          <span class="marker m2"></span>
+          <span class="ann ann-area">area = size</span>
+          <span class="ann ann-tilt">angle = tilt</span>
+          <span class="ann ann-pos">position = where</span>
+        </div>
+        <figcaption><b>One marker or two.</b> The area is read as a fraction of the frame, so the same drawing means the same thing at 832x1216 and at 1536x1536.</figcaption>
+      </figure>
+
+      <div class="rv">
+        <div class="panel">
+          <div class="panel-head"><span>Measured class medians</span><span>marker area of frame</span></div>
+          <ul class="axis" id="axis">
+            <li data-area="1.49"><span class="name">flat</span><span class="track"><span class="fill"></span></span><span class="val">1.49%</span></li>
+            <li data-area="2.94"><span class="name">small</span><span class="track"><span class="fill"></span></span><span class="val">2.94%</span></li>
+            <li data-area="3.22"><span class="name">medium</span><span class="track"><span class="fill"></span></span><span class="val">3.22%</span></li>
+            <li data-area="7.18"><span class="name">large</span><span class="track"><span class="fill"></span></span><span class="val">7.18%</span></li>
+            <li data-area="13.95"><span class="name">huge</span><span class="track"><span class="fill"></span></span><span class="val">13.95%</span></li>
+            <li data-area="16.50" class="hot"><span class="name">gigantic</span><span class="track"><span class="fill"></span></span><span class="val">16.50%</span></li>
+          </ul>
+        </div>
+        <p class="prose" style="margin-top:1.25rem;color:var(--fg-2);font-size:.96rem">Note the shape of the ladder: <code>small</code> to <code>medium</code> is a narrow step, while <code>medium</code> to <code>large</code> to <code>huge</code> opens up fast. That is the measured distribution, and it is why eyeballing the size is a poor substitute for setting the area. Intermediate values are legitimate too, because the dial is continuous.</p>
+      </div>
+    </div>
+
+    <div class="callout rv">
+      <p class="eyebrow">Keep the marker in-distribution</p>
+      <p>The LoRA was trained on one marker style, so three rules keep you inside it: the <b>background stays black</b> (no gradients, no textures, no other content); the <b>fill stays bright</b>, <code>#FADBAE</code> by default; and there are <b>one or two ellipses</b> whose area is the size. Overlapping markers merge as a <b>union</b>, not a sum, which is the behaviour the training data had.</p>
+      <p>The condition image is forced to the <b>target's exact pixel size</b> when you connect an <code>image</code> to the node. This matters, because the pipeline bucket-crops the reference and a size mismatch silently displaces the markers.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ TRAINING ============ -->
+<section id="training">
+  <div class="wrap">
+    <div class="section-head rv">
+      <p class="eyebrow">Training Details</p>
+      <h2>Two stages, structure first then detail</h2>
+    </div>
+
+    <div class="todo rv">
+      <p class="eyebrow accent">Fill in before publishing</p>
+      <p>The structure below is final. The bracketed values are the only numbers that could not be verified from the repository; everything outside the brackets is checked against the code and the shipped workflow.</p>
+    </div>
+
+    <div class="split">
+      <div class="prose rv">
+        <p><b>Stage 1: [resolution] pretraining.</b> Trained on a [N]-pair subset of the labelled breast-size dataset, with captions generated on the scene only and no size wording, which forces the size signal into the condition image instead of the text. A constant learning rate of [LR] establishes the area to class mapping.</p>
+        <p><b>Stage 2: [resolution] refinement.</b> Continued training at higher resolution, focused on detail reconstruction at the marker boundary: edges, thin structures and fine geometry. The schedule switches to cosine for more stable convergence.</p>
+      </div>
+
+      <div class="panel rv">
+        <div class="panel-head"><span>Run summary</span><span>bracketed = to confirm</span></div>
+        <table>
+          <tbody>
+            <tr><td class="k">Stage 1</td><td>[res], [N] pairs, scene-only captions, constant LR [LR]</td></tr>
+            <tr><td class="k">Stage 2</td><td>[res] refinement, cosine LR schedule</td></tr>
+            <tr><td class="k">Total epochs</td><td>[N]+</td></tr>
+            <tr><td class="k">Base model</td><td>Krea2, turbo LoRA rank 64</td></tr>
+            <tr><td class="k">Condition</td><td>_bd marker image</td></tr>
+            <tr><td class="k">Caption rule</td><td>scene only, no size words</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ USAGE ============ -->
+<section id="usage">
+  <div class="wrap">
+    <div class="section-head rv">
+      <p class="eyebrow">Usage</p>
+      <h2>Five steps from install to sample</h2>
+      <p class="lede">This LoRA <b>must</b> be used together with the EditUtils plugin. It will not work as intended without it.</p>
+    </div>
+
+    <div class="split">
+      <div class="rv">
+        <ol class="steps">
+          <li><b>Install the plugin</b><span>ComfyUI-EditUtils, plus Comfyui-LoraUtils for the LoRA merge nodes used in the example.</span></li>
+          <li><b>Load the LoRA</b><span><code>breasts_control_lrzjason_20261015.safetensors</code> at strength 1.0, merged on top of the Krea2 turbo LoRA.</span></li>
+          <li><b>Draw the control</b><span>Add <code>BreastSizeControl_EditUtils</code>, drag one or two markers, and hit the preset button for the size you want. Connect a target image to force the exact output size.</span></li>
+          <li><b>Write the scene prompt only</b><span>Subject, clothing, framing, light. No size words, or the text competes with the geometry.</span></li>
+          <li><b>Sample</b><span><code>euler / simple</code>, 8 steps, CFG 1.0, denoise 1.0.</span></li>
+        </ol>
+        <div class="cta-row" style="margin-top:1.75rem">
+          <a class="btn btn-ghost" href="../workflows/k2%20breasts%20size%20control.json" download>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 11 5 5 5-5"/><path d="M4 20h16"/></svg>
+            Download the workflow
+          </a>
+        </div>
+      </div>
+
+      <div class="rv">
+        <div class="panel">
+          <div class="panel-head"><span>Canvas tools</span></div>
+          <table class="grid">
+            <tbody>
+              <tr><td class="node-name">Drag</td><td>empty space creates a marker, max two; the body moves it</td></tr>
+              <tr><td class="node-name">Edge handles</td><td>set <code>rx</code> / <code>ry</code> independently, which is how a circle becomes an ellipse</td></tr>
+              <tr><td class="node-name">Corner / wheel</td><td>uniform scale, stays a circle; Shift + edge drag for uniform too</td></tr>
+              <tr><td class="node-name">Rotation handle</td><td>rotate the marker, or type an exact angle</td></tr>
+              <tr><td class="node-name">Presets</td><td>the six measured class areas</td></tr>
+              <tr><td class="node-name">Guide</td><td>dims the connected image underneath for placement, never touches the output</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="rv" style="margin-top:clamp(2.5rem,5vh,3.5rem)">
+      <p class="eyebrow" style="margin-bottom:1rem">Wiring, from k2 breasts size control.json</p>
+      <div class="code">
+<pre>UNETLoader <span class="cm">(krea2_raw_int8_convrot)</span>
+  <span class="hl">-&gt;</span> Krea2EditApply
+  <span class="hl">-&gt;</span> [Merge LoRA: krea2_turbo_lora_rank_64_bf16]
+  <span class="hl">-&gt;</span> [Merge LoRA: breasts_control_lrzjason_20261015]
+  <span class="hl">-&gt;</span> KSampler <span class="hl">-&gt;</span> VAEDecode <span class="hl">-&gt;</span> SaveImage
+
+CLIPLoader <span class="cm">(qwen3vl_4b_fp8_scaled, type krea2)</span> <span class="hl">--+</span>
+VAELoader  <span class="cm">(qwen_image_vae)</span>                      <span class="hl">--+</span>
+Krea2ModelConfig                                  <span class="hl">--+--&gt;</span> EditTextEncode_EditUtils <span class="hl">--&gt;</span> positive + latent
+PrimitiveStringMultiline <span class="cm">(scene prompt)</span>         <span class="hl">--+</span>                                  <span class="hl">|</span>
+BreastSizeControl <span class="hl">-&gt;</span> QwenConfigPreparer <span class="hl">--------+</span>                                  <span class="hl">+--&gt;</span> ConditioningZeroOut <span class="hl">--&gt;</span> negative</pre>
+      </div>
+    </div>
+
+    <div class="rv" style="margin-top:2rem">
+      <div class="panel">
+        <div class="panel-head"><span>Nodes involved</span><span>EditUtils</span></div>
+        <table class="grid">
+          <thead><tr><th>Node</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td class="node-name">BreastSizeControl_EditUtils</td><td>The canvas. Draws the <code>_bd</code> condition image that acts as the reference. <b>This is the dial.</b></td></tr>
+            <tr><td class="node-name">Krea2ModelConfig_EditUtils</td><td>Krea2 model config, <code>model_name="qwen"</code> route, <code>vae_unit=8</code>, built-in instruction.</td></tr>
+            <tr><td class="node-name">QwenConfigPreparer_EditUtils</td><td>Wraps the condition image as the reference: <code>ref_longest_edge=1024</code>, <code>ref_crop=pad</code>, <code>to_vl</code>, <code>vl_target_size=384</code>.</td></tr>
+            <tr><td class="node-name">EditTextEncode_EditUtils</td><td>Encodes prompt and reference into the conditioning, the sampling latent and <code>pad_info</code>.</td></tr>
+            <tr><td class="node-name">Krea2EditApply_EditUtils</td><td>Patches the model so the reference latent is injected: <code>ref_pos_match_target</code>, <code>ref_kv_cache=1</code>, <code>ref_strength=1.0</code>.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="prose" style="margin-top:1.25rem;font-size:.95rem;color:var(--fg-2)">Model files: <code>krea2_raw_int8_convrot.safetensors</code> (UNET), <code>qwen3vl_4b_fp8_scaled.safetensors</code> (CLIP, type <code>krea2</code>), <code>qwen_image_vae.safetensors</code> (VAE).</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ NOTES ============ -->
+<section id="notes">
+  <div class="wrap">
+    <div class="section-head rv">
+      <p class="eyebrow">Notes</p>
+      <h2>Things worth knowing before you run it</h2>
+    </div>
+    <ul class="notes rv">
+      <li><span class="glyph">01</span><span><b>The caption rule is not a suggestion.</b> If you put size words in the prompt, the text and the reference image compete for the same variable and the result drifts. Keep the text scene-only and let the geometry speak.</span></li>
+      <li><span class="glyph">02</span><span><b>Higher-resolution inputs yield richer marker geometry</b>, since the marker's edge is where the extra detail lands.</span></li>
+      <li><span class="glyph">03</span><span><b>The area is the dial, not a rendering.</b> The condition image is a control signal, not a target to be drawn literally.</span></li>
+      <li><span class="glyph">04</span><span><b>Works best with long, descriptive scene captions</b>, consistent with the dataset side, where captions were written scene-only.</span></li>
+      <li><span class="glyph">05</span><span><b>Overlapping markers merge by union</b>, so two crossing ellipses are not twice the size.</span></li>
+      <li class="warn"><span class="glyph">06</span><span>This control LoRA and the Krea2 edit path are <b>still in development</b>. Results depend on the LoRA checkpoint and <code>ref_strength</code>.</span></li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============ WORKFLOW + CONTACT ============ -->
+<section class="final" id="workflow">
+  <div class="wrap">
+    <div class="final-grid">
+      <div class="rv">
+        <p class="eyebrow">RH Workflow</p>
+        <h2 style="margin-top:.9rem">Try it without installing anything</h2>
+        <p class="lede" style="max-width:46ch">The RunningHub workflow runs the same graph in the browser. Bring your own scene prompt and drag the markers.</p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="https://www.runninghub.ai/post/2082077636234313729/?inviteCode=rh-v1279" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h13"/><path d="m12.5 6 6 6-6 6"/></svg>
+            Open the workflow
+          </a>
+        </div>
+        <p style="margin-top:1.5rem;font-family:var(--mono);font-size:11px;color:var(--fg-3);letter-spacing:.04em">Intended for responsible, adult-only creative work involving adult subjects.</p>
+      </div>
+
+      <div class="rv" id="contact">
+        <p class="eyebrow">Contact</p>
+        <ul class="links">
+          <li><span class="k">Twitter / X</span><a href="https://x.com/Lrzjason" target="_blank" rel="noopener">@Lrzjason</a></li>
+          <li><span class="k">Email</span><a href="mailto:lrzjason@gmail.com">lrzjason@gmail.com</a></li>
+          <li><span class="k">QQ Group</span><span style="color:var(--fg)">866612947</span></li>
+          <li><span class="k">WeChat ID</span><span style="color:var(--fg)">fkdeai</span></li>
+          <li><span class="k">CivitAI</span><a href="https://civitai.com/user/xiaozhijason" target="_blank" rel="noopener">xiaozhijason</a></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>ComfyUI-EditUtils &middot; Breast Size Control LoRA (Krea2)</p>
+    <p><a href="https://github.com/lrzjason/ComfyUI-EditUtils" target="_blank" rel="noopener" style="color:var(--fg-2);text-decoration:none">github.com/lrzjason/ComfyUI-EditUtils</a></p>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>
