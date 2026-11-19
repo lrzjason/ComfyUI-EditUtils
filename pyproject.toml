@@ -1,7 +1,7 @@
 [project]
 name = "editutils"
 description = "A collection of utility nodes for advanced image editing in ComfyUI, supporting multiple AI models including Qwen, Qwen-Image 2.1, Flux2Klein, Flux3Klein, Krea2, MOSS-Image and MiniMax-H3-Image."
-version = "1.6.0"
+version = "1.7.0"
 license = {file = "LICENSE"}
 
 [project.urls]
