@@ -2,10 +2,12 @@
 
 [English](README.md) | [简体中文](README_zh.md)
 
-一套用于 ComfyUI 高级图像编辑的工具节点集合，支持 Qwen、Qwen-Image 2.1、Flux2Klein、Flux3Klein、Krea2 等多种 AI 模型。
+一套用于 ComfyUI 高级图像编辑的工具节点集合，支持 Qwen、Qwen-Image 2.1、Flux2Klein、Flux3Klein、Krea2、MOSS-Image、MiniMax-H3-Image 等多种 AI 模型。
 
 ## 更新日志
 
+- **20261119** 新增 **MiniMax-H3-Image** 支持（`minimax_h3_image` 路由）—— 注意是 H3 家族的**图像**模型，不是 H3 视频模型。`MinimaxH3ImageModelConfig_EditUtils`（`vae_unit=32`、空模板）+ `MinimaxH3ImageConfigPreparer_EditUtils`（短边 1024/2048 参考图缩放、`scale_up` 目标倍数、vision 副本）+ `EditTextEncode_EditUtils` 的 `minimax_refs` 路由分支 + `MinimaxH3ImageOutputExtractor_EditUtils` + `MinimaxH3ImageEditApply_EditUtils`（模型校验，不打补丁）。需要 ComfyUI 已内置 H3-Image 支持。可运行示例：[minimax h3 image editutils example.json](workflows/minimax%20h3%20image%20editutils%20example.json)。详见 [MiniMax-H3-Image](#minimax-h3-image)。
+- **20261019** 新增 **MOSS-Image** 参考图编辑：`MossImageModelConfig_EditUtils`（FLUX.2 VAE、`vae_unit=16`、Qwen3.5-VL prompt grounding）+ `MossImageConfigPreparer_EditUtils`（16px / center-fit / 黑边默认）+ `MossImageEditApply_EditUtils` —— 与 Krea2 同形的**模型补丁**，把干净的参考 token 追加到 text 之后、放在 4 轴 RoPE 的 `r` 轴、以 `t=0` 调制，并内置与 ai-toolkit 兼容的 `ref_kv_cache`。详见 [MOSS-Image](#moss-image)。
 - **20261016** 新增 **FLUX.3 Klein** 支持（`flux3klein` 路由）以及 **bbox（bounding box）画布编辑器**：新增 `Flux3Klein*` 系列节点（画布独立为 `Flux3KleinBBox_EditUtils`）。在参考图上画框、填 **id** 与 **desc**，节点会把 FLUX.3 元素表以 JSON 数组追加到 prompt —— `generation` 行（`{id, bbox, desc}`）用于布局，`editing` 行（`{id, from, src_bbox, tgt_bbox, desc}`）用于 保留/移动/新建/删除。需要 ComfyUI 已支持 FLUX.3。可运行示例：[flux3 editutils example.json](workflows/flux3%20editutils%20example.json)。
 - **20261015** 新增 **BreastSizeControl_EditUtils** —— 在节点自带的画布上直接手绘胸部尺寸控制图（`_bd` 条件图）：黑底 + 1~2 个 `#FADBAE` 椭圆，可移动、可变形（圆 ⇄ 椭圆）、可**旋转**、可改色，并有一键套用实测的 flat/small/medium/large/huge/gigantic 档位面积。标记的**面积**就是尺寸旋钮。可运行的 Krea2 示例：[k2 breasts size control.json](workflows/k2%20breasts%20size%20control.json)。
 - **20261007** 新增 AlphaNoiseFilter_EditUtils —— 清理 Qwen-Image 2.1 生成图的 alpha 通道（裁掉低值 alpha 噪点、删除小面积 alpha 孤岛、腐蚀/膨胀、羽化），输出干净的 RGBA 图与蒙版。羽化严格向内：渐变带建立在 matte 自身的边缘内侧，轮廓绝不向外扩展到透明区，因此不会有背景色渗出来形成彩色光晕。
@@ -207,6 +209,108 @@ FLUX.3 把布局当作**追加在 prompt 后面的 JSON 数组**——没有单�
 - 文字建议每行一个框，并在 `desc` 里用引号写出准确文字。
 - 采样建议：distilled checkpoint 是 flow-map 模型——约 4–16 步、CFG 1.0（不用负面提示词）；base 模型使用 CFG。
 
+## MOSS-Image
+
+EditUtils 以**与 Krea2 编辑路径相同的形式**为 MOSS-Image 增加**参考图编辑**：参考图既通过 Qwen3.5-9B 的视觉塔进入 prompt（语义 grounding），又由一个**模型补丁**作为干净的参考 token 注入 DiT。
+
+MOSS-Image（`comfy/ldm/moss_image/model.py`）原生只做文生图——序列是 `[target image | text]`，使用 4 轴 RoPE `(r, f, h, w)`。`MossImageEditApply_EditUtils` 把 forward 改写为
+
+```
+[target image | text | ref1 | ref2 | ...]
+```
+
+参考图 `n` 使用 `r = n`、`f = text_len`（基础模型空置的坐标）、自己的居中 h/w 网格，并以 **t = 0** 调制（`index_timestep_zero` 参考法）。输出仍然只裁剪回 target image token。`ref_kv_cache`（默认开）先用一次 t=0 的 ref-only 前向预计算各层 K/V，之后每个去噪步直接注入——对应 ai-toolkit 的 `kv_cache` MOSS-Image edit 训练模式。
+
+**节点：**
+
+| 节点 | 作用 |
+|---|---|
+| `MossImageModelConfig_EditUtils` | MOSS-Image 模型配置（`moss_image` 分支、FLUX.2 VAE 对应 `vae_unit=16`、`llama_template` 必须为空——模板由 MOSS tokenizer 自己构造） |
+| `MossImageConfigPreparer_EditUtils` | MOSS 默认的每图配置：16px 对齐、`ref_crop=center`（贴近训练 fit）、黑边、`to_vl=True`。多张参考图串联多个节点 |
+| `EditTextEncode_EditUtils` | 编码 prompt + 参考图：`Picture n: <|vision_start|>…` + VAE latent（128 通道）挂到 conditioning |
+| `MossImageEditApply_EditUtils` | **模型补丁**：把参考潜变量作为额外 token 追加到序列末尾，t=0；可选 `ref_kv_cache` / `ref_strength` |
+
+**接线：**
+
+```
+UNETLoader  (moss_image_sft_int8_convrot) ──► MossImageEditApply ──► [LoRA] ──► KSampler ──► VAEDecode ──► SaveImage
+CLIPLoader  (qwen3.5_9b_w4a8_gptq, type moss_image) ─┐
+VAELoader   (flux2-vae) ─────────────────────────────┤
+LoadImage ──► MossImageConfigPreparer ───────────────┼──► EditTextEncode_EditUtils ──► positive / latent
+MossImageModelConfig ────────────────────────────────┘
+```
+
+**说明：**
+
+- 需要 ComfyUI 已内置 MOSS-Image 支持（`image_model="moss_image"`、`CLIPLoader` 类型 `moss_image`）。
+- MOSS-Image-Base / -SFT 本身是**文生图** checkpoint：参考 token 路径只有在配套的 edit LoRA（用相同布局训练，ai-toolkit `moss_image` edit + `kv_cache`）下才有意义。没有这样的 LoRA 时，参考图只是一路未训练过的条件信号。
+- `ref_kv_cache=True` 对应训练默认值。如果 LoRA 是 `kv_cache: false` 训练的，请关掉缓存——此时参考 token 会留在序列里，同时 attend 文本与噪声图。
+- 参考图建议约 1MP；1024×1024 的参考图每步会多 4096 个 token（有缓存后复用开销很小）。缓存本身放在 CPU 内存：4096 个参考 token 约 2GB，按文本长度（正/负条件）分别缓存，最多保留 4 份。
+- 建议起点：Euler / Simple、30 步、CFG 3.0、`ref_strength=1.0`。MOSS 参考采样还会在负面分支做 layer skipping（如 `SkipLayerGuidanceDiTSimple`、`single_layers: 22`），本补丁会正常遵循。
+
+> ⚠️ **注意：** MOSS-Image 编辑支持是新加的，需要 edit LoRA；只打补丁、不接 LoRA 时基础 checkpoint 不会自动获得参考图编辑能力。
+
+## MiniMax-H3-Image
+
+EditUtils 通过 `minimax_h3_image` 路由支持 **MiniMax-H3-Image** —— 它是 MiniMax H3 家族的**图像**模型（`image_model="minimax_h3_image"`），**不是** H3 视频/音频模型。
+
+> **H3-Image 与 H3 是两个模型。** H3 打包的是 video + audio 两路 latent 的 `NestedTensor`，走带 shift 的采样调度；H3-Image 只去噪**单帧 24 通道 latent**（`[1, 24, 1, H/16, W/16]`），完全没有音频流。它的 checkpoint 是 **6 步 PDD 蒸馏**：每步一个输出头的头部组固定在一张 7 点 sigma 网格（`pdd_sigmas`）上，CFG 已烘焙进权重，因此采样契约就是 **6 步、cfg 1.0、负面只是占位**。
+
+**ComfyUI 核心已原生实现** H3-Image（`comfy/ldm/minimax/model.py` 的 `MiniMaxH3ImageModel`、`model_base.MiniMaxH3Image`）。EditUtils 只需构造与官方 `MiniMaxH3ImageConditioning` 节点完全相同的三样东西：
+
+- **文本条件** —— `minimax` 类型的 CLIP（Qwen3-VL-32B，截断到第 50 层）。它的 tokenizer **没有 chat template**：会自己拼 `"Picture 1: " <vision block> "Picture 2: " <vision block> … <prompt>`，所以塞系统提示词只会被当成正文编码；
+- **参考 latent** —— 走 `minimax_refs` 条件键，格式 `[{"kind": "image", "latent_h": h, "latent_w": w, "latent": z}]`。`PackedLayout` 按 `[文本 | 参考行 | 目标行]` 打包，模型每步在 `t = 0.999` 重新注入参考行（从不参与去噪）；
+- **目标 latent** —— 单帧 24 通道，`H/16 × W/16`。
+
+这条路径**不需要打模型补丁**（区别于 MOSS-Image / FLUX.2 klein），所以图里模型保持未打补丁状态。
+
+**节点：**
+
+| 节点 | 作用 |
+|---|---|
+| `MinimaxH3ImageModelConfig_EditUtils` | 模型配置（`minimax_h3_image` 路由、`vae_unit=32`、空模板） |
+| `MinimaxH3ImageConfigPreparer_EditUtils` | 每图配置：`to_ref`、`ref_main_image`、`ref_short_edge` / `ref_max_short_edge`（1024 / 2048）、`scale_up`、`to_vl`、裁剪/填充控制。串联多个节点即可多参考图 |
+| `MinimaxH3ImageEditTextEncode_EditUtils` | 一体化简易路径（image1–3），输出与 `EditTextEncode_EditUtils` 一致 |
+| `MinimaxH3ImageOutputExtractor_EditUtils` | 拆包 `custom_output`，额外给出 `minimax_refs` 与 `target_size` |
+| `MinimaxH3ImageEditApply_EditUtils` | 模型校验（可选）：校验架构并打印 PDD 网格 / 步数 / CFG 契约。H3-Image **不需要**重写 forward |
+
+**尺寸** —— H3I 训练在 **4–20 MP**（最佳约 16 MP）；1 MP 的目标会出海报式乱码。参考图则约 1 MP 最合适，这正是 ComfyUI 用**短边 1024 px、上限 2048**、并对齐 32 px 来缩放编辑参考图的原因：
+
+- `ref_short_edge`（默认 1024）：VAE 参考 latent 与 vision 副本的短边；
+- `ref_max_short_edge`（默认 2048）：大图的上限钳制；
+- 主图的 `scale_up`（默认 1.0）把它的参考网格乘成采样目标：参考图保持约 1 MP，latent 长到 4–20 MP。1 MP 的 1:1 主图配 `scale_up=2` 就是 4 MP 目标。
+
+为什么是 32 px 而不是 16：VAE token 是 16 px，但 DiT 对 latent 做 2×2 patch，所以可表示的画布边长是 32 px 的整数倍（两个 VAE token）。这也正是 ComfyUI 自己给 H3I 参考图对齐的粒度，模型配置里 `vae_unit=32` 就是为此。
+
+**接线** —— 见 [minimax h3 image editutils example.json](workflows/minimax%20h3%20image%20editutils%20example.json)：
+
+```
+UNETLoader (minimax_h3_image_pruned_w4a8) ──────────────────────► KSampler ─► VAEDecode ─► SaveImage
+CLIPLoader  (qwen3vl_32b_minimax_h3_nvfp4_awq, type minimax) ─┐
+VAELoader   (minimax_h3_image_vae_fp16) ──────────────────────┼─► EditTextEncode
+LoadImage ─► MinimaxH3ImageConfigPreparer ─┬─ configs ────────┘
+                                         └─ 继续串参考图的 Preparer
+MinimaxH3ImageModelConfig ────────────────────────────────────► EditTextEncode
+EditTextEncode.conditioning ─► ConditioningZeroOut ─► KSampler.negative
+```
+
+**采样：**
+
+| 设置 | 值 | 原因 |
+|---|---|---|
+| `steps` | **6** | `sigma()` 在 checkpoint 的 7 点 PDD 网格上线性插值，6 步正好落在网格点上；其它步数会插值到网格外 |
+| `cfg` | **1.0** | 引导已烘焙进权重；负面只需存在，接 `ConditioningZeroOut` 即可 |
+| sampler / scheduler | `euler` / `simple` | 与官方工作流一致 |
+| `denoise` | 1.0 | 蒸馏轨迹 |
+
+**提示词** —— 写**结果**的完整描述，参考图用 `<Picture 1>`、`<Picture 2>` … 指代。**不要自己写 `"Picture n: "` 标签**：tokenizer 会自动加，手写会重复计一次。
+
+**说明：**
+
+- 需要 ComfyUI 已内置 MiniMax-H3-Image 支持（`image_model="minimax_h3_image"`、`CLIPLoader` 类型 `minimax`）。
+- 像素 mask 不在 H3I 的打包布局里；接到 Preparer 上的 mask 会被忽略并打印提示。
+- `MinimaxH3ImageEditApply_EditUtils` 是可选节点，只作守护/诊断：若误接 FLUX / MOSS 补丁或 H3 **视频**模型，`minimax_refs` 会被静默忽略，这个节点会把它变成明确报错。
+
 ## Krea2 胸部尺寸控制
 
 一个训练好的控制 LoRA + `BreastSizeControl_EditUtils`，把胸部尺寸变成一个**画出来的旋钮**：在画布上画 1~2 个标记，标记的**面积**（以及位置、角度）就决定结果。提示词只描述画面，**刻意不写任何尺寸词** —— 几何量应该只来自参考图。
@@ -295,6 +399,11 @@ QwenImage21ModelConfig ──────────────────┴
 
 示例工作流位于 [workflows](workflows/) 目录：
 
+- **[minimax h3 image editutils example.json](workflows/minimax%20h3%20image%20editutils%20example.json)** - MiniMax-H3-Image 编辑工作流。`LoadImage → MinimaxH3ImageConfigPreparer_EditUtils（可继续串联第二张参考图）→ EditTextEncode_EditUtils ← MinimaxH3ImageModelConfig_EditUtils → KSampler → VAEDecode → SaveImage`，负面由 `ConditioningZeroOut` 提供。
+  - 模型：`minimax_h3_image_pruned_w4a8.safetensors`（UNET）、`qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`（CLIP，type `minimax`）、`minimax_h3_image_vae_fp16.safetensors`（VAE）。
+  - 示例采样：`euler / simple`、**6 步**、CFG 1.0 —— checkpoint 的 PDD 网格就是 6 个区间，引导已烘焙进权重。
+  - 主图 `scale_up = 2`，约 1 MP 的参考图采出约 4 MP 目标；参考图保持 1024 短边。示例不含 `MinimaxH3ImageEditApply_EditUtils` —— H3-Image 原生消费 `minimax_refs`。
+  - 需要 ComfyUI 已内置 MiniMax-H3-Image 支持。
 - **[flux3 editutils example.json](workflows/flux3%20editutils%20example.json)** - 使用 bounding box 元素表的 FLUX.3 Klein 编辑工作流。接线 `LoadImage → Flux3KleinConfigPreparer_EditUtils → Flux3KleinBBox_EditUtils → EditTextEncode_EditUtils ← Flux3KleinModelConfig_EditUtils → KSampler → VAEDecode → SaveImage`，负面由 `ConditioningZeroOut` 提供。BBox 节点只接 Preparer 的 `config`（`configs` 输入留空），因此装饰后的 config 会被追加进链。
   - 模型：`flux3_image_klein_sd_int8_convrot.safetensors`（UNET）、`qwen3vl_4b_fp8_scaled.safetensors`（CLIP，type `flux3`）、`flux2-vae.safetensors`（VAE）。
   - 示例中的采样设置：`euler / simple`，**8 步**，CFG 1.0，固定种子（蒸馏 flow-map checkpoint 不做引导；建议区间 4–16 步）。没有 `Flux3KleinEditApply_EditUtils`——FLUX.3 原生消费 `reference_latents`。
@@ -319,14 +428,14 @@ QwenImage21ModelConfig ──────────────────┴
 
 ## 填充边缘控制（Pad Edge Control）
 
-当 `ref_crop` 设为 `pad` 时，图像会被填充到 VAE 单元尺寸的整数倍。填充区域的外观现在可以按图配置，通过配置节点上的 `pad_mode`、`pad_color`、`pad_color_rgb`、`pad_noise`（`QwenConfigPreparer_EditUtils` / `QwenImage21ConfigPreparer_EditUtils` / `Flux2KleinConfigPreparer_EditUtils` / `Flux3KleinConfigPreparer_EditUtils`）、`ConfigJsonParser_EditUtils` 的 JSON，或独立的 `LongestEdgeImageProcess_EditUtils` 节点设置：
+当 `ref_crop` 设为 `pad` 时，图像会被填充到 VAE 单元尺寸的整数倍。填充区域的外观现在可以按图配置，通过配置节点上的 `pad_mode`、`pad_color`、`pad_color_rgb`、`pad_noise`（`QwenConfigPreparer_EditUtils` / `QwenImage21ConfigPreparer_EditUtils` / `Flux2KleinConfigPreparer_EditUtils` / `Flux3KleinConfigPreparer_EditUtils` / `MossImageConfigPreparer_EditUtils` / `MinimaxH3ImageConfigPreparer_EditUtils`）、`ConfigJsonParser_EditUtils` 的 JSON，或独立的 `LongestEdgeImageProcess_EditUtils` 节点设置：
 
 - **pad_mode**（默认：`color`）：
   - `color`：用 `pad_color` 纯色填充
   - `edge`：复制最外侧一行／一列像素
   - `mirror`：在边界处镜像内容
   - `border_mean`：用最近 8 个边缘像素的均值填充每一侧
-- **pad_color**（默认：Qwen 1.0 与 Qwen-Image 2.1 为 `white`；Flux2Klein / Flux3Klein 与独立的 `LongestEdgeImageProcess_EditUtils` 为 `black`）：下拉选项 `red`、`green`、`blue`、`white`、`black`、`custom`。
+- **pad_color**（默认：Qwen 1.0 与 Qwen-Image 2.1 为 `white`；Flux2Klein / Flux3Klein / MOSS-Image / MiniMax-H3-Image 与独立的 `LongestEdgeImageProcess_EditUtils` 为 `black`）：下拉选项 `red`、`green`、`blue`、`white`、`black`、`custom`。
 - **pad_color_rgb**（默认：`-`）：可选覆盖项，**6 位 hex 颜色，`#` 可有可无**（例如 `FF0000` 或 `#FF0000`）。只要是合法 hex 就会覆盖 `pad_color`（无论下拉选了什么）；其它值（`-`、长度不对、含非 hex 字符、纯数字、`r,g,b`）一律无效、不生效，以下拉选项为准。`custom` 本身不带颜色，hex 无效时回退到该模型默认色。
 - **pad_noise**（默认：`0.0`）：**只**给填充区域加高斯抖动（标准差），图像内容完全不受影响；配合纯色填充推荐 0.02–0.05。
 
@@ -342,7 +451,7 @@ QwenImage21ModelConfig ──────────────────┴
 
 ## 主要特性
 
-- **多模型支持**：可用于 Qwen、Qwen-Image 2.1、Flux2Klein、Flux3Klein、Boogu 与 Krea2 模型，实现多样化的图像编辑
+- **多模型支持**：可用于 Qwen、Qwen-Image 2.1、Flux2Klein、Flux3Klein、Boogu、Krea2、MOSS-Image 与 MiniMax-H3-Image 模型，实现多样化的图像编辑
 - **灵活配置**：针对每张图片单独配置参考图与 VL 处理选项
 - **填充边缘控制**：可配置填充模式／颜色／噪声（Qwen 1.0 与 Qwen-Image 2.1 默认白边），避免生成时黑边被放大
 - **统一接口**：通过配置节点，单个 `EditTextEncode_EditUtils` 节点即可适配多种模型
@@ -531,7 +640,7 @@ FLUX.3 Klein 的每图配置节点（`to_ref` / `ref_main_image` / `ref_longest_
 
 ### ComfyUI-EditUtils 与 ComfyUI-QwenEditUtils 的对比
 ComfyUI-EditUtils 是 ComfyUI-QwenEditUtils 的后续版本，包含以下改进：
-- 多模型支持（Qwen、Qwen-Image 2.1、Flux2Klein、Flux3Klein、Boogu 与 Krea2）
+- 多模型支持（Qwen、Qwen-Image 2.1、Flux2Klein、Flux3Klein、Boogu、Krea2、MOSS-Image 与 MiniMax-H3-Image）
 - 采用配置节点的统一节点架构
 - 更高的灵活性与模块化程度
 - 更好的代码组织与可维护性

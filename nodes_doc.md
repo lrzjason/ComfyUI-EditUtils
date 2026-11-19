@@ -1,7 +1,8 @@
 # EditUtils 节点参考文档
 
-> 本文档以 `nodes.py` 当前代码（`NODE_CLASS_MAPPINGS`，45 个节点）为准。
-> 显示名均带 `lrzjason` 后缀；节点菜单分类多为 `advanced/conditioning`，图像类节点在 `image`，模型补丁在 `Krea2/edit` / `QwenImage/edit` / `Flux2Klein/edit` / `Flux3Klein/edit`。
+> 本文档以 `nodes/` 包当前代码（`nodes/registry.py` 的 `NODE_CLASS_MAPPINGS`，53 个节点）为准。
+> 代码按节点家族拆成多个模块：`configs`（模型配置）、`encode`（统一编码）、`simple_encoders`（各模型一体化编码）、`preparers`（每图配置链）、`extractors`（拆包）、`apply_*`（各模型补丁/校验）、`flux3_bbox`（元素表）、`image_utils`（图像工具）、`conditions`（条件缓存）、`breast_size`（画布）；`_shared` 放公共助手，`registry` 汇总两个映射。见文末「代码结构」。
+> 显示名均带 `lrzjason` 后缀；节点菜单分类多为 `advanced/conditioning`，图像类节点在 `image`，模型补丁在 `Krea2/edit` / `MossImage/edit` / `QwenImage/edit` / `Flux2Klein/edit` / `Flux3Klein/edit`；`MinimaxH3ImageEditApply_EditUtils`（模型校验）在 `MinimaxH3Image/edit`。
 > 前端脚本在 `web/js/`（`WEB_DIRECTORY = "./web"`）：`BreastSizeControl_EditUtils` 的画布编辑器，以及 `Flux3KleinBBox_EditUtils` 的 bbox 画布编辑器（`flux3_bbox_editor.js`）。
 > 若文档与代码不符，以代码为准。
 
@@ -11,7 +12,7 @@
 - [二、文本/图像编码节点（Text Encode）](#二文本图像编码节点text-encode)
 - [三、Config Preparer（configs 链）](#三config-preparerconfigs-链)
 - [四、Output Extractor（custom_output 拆包）](#四output-extractorcustom_output-拆包)
-- [五、模型补丁（Krea2 / QwenImage / QwenImage 2.1 / Flux2Klein / Flux3Klein / Boogu）](#五模型补丁krea2--qwenimage--qwenimage-21--flux2klein--flux3klein--boogu)
+- [五、模型补丁（Krea2 / MOSS-Image / QwenImage / QwenImage 2.1 / Flux2Klein / Flux3Klein / MiniMax-H3-Image / Boogu）](#五模型补丁krea2--moss-image--qwenimage--qwenimage-21--flux2klein--flux3klein--minimax-h3-image--boogu)
 - [六、条件缓存（Save/Load Condition）](#六条件缓存saveload-condition)
 - [七、图像处理与杂项工具](#七图像处理与杂项工具)
 
@@ -24,18 +25,18 @@
 ### ModelConfig_EditUtils
 
 **显示名**：EditUtils: Model Config lrzjason
-通用模型配置节点，可选 qwen / flux2klein / flux3klein / boogu。
+通用模型配置节点，可选 qwen / flux2klein / flux3klein / boogu / moss_image / minimax_h3_image。
 
 | 输入 | 类型 | 默认 | 说明 |
 |---|---|---|---|
-| model_choice | COMBO: `qwen`/`flux2klein`/`flux3klein`/`boogu` | `qwen` | 模型选择 |
+| model_choice | COMBO: `qwen`/`flux2klein`/`flux3klein`/`boogu`/`moss_image`/`minimax_h3_image` | `qwen` | 模型选择 |
 | model_name | STRING | `""` | 留空时使用 model_choice |
-| vae_unit | INT (8–64, step 8) | 8 | VAE 对齐单位；Qwen=8，Flux2Klein=16，Flux3Klein=16，Boogu=8 |
-| instruction | STRING (optional, multiline) | `""` | 自定义 system prompt；留空用内置默认。boogu 忽略此项 |
+| vae_unit | INT (8–64, step 8) | 8 | VAE 对齐单位；Qwen=8，Flux2Klein=16，Flux3Klein=16，Boogu=8，MOSS-Image=16，MiniMax-H3-Image=32 |
+| instruction | STRING (optional, multiline) | `""` | 自定义 system prompt；留空用内置默认。boogu / moss_image / minimax_h3_image 忽略此项 |
 
 - 输出：`model_config` (DICT) — `{model_name, vae_unit, llama_template}`。
-- boogu 时 `llama_template` 强制为 `""`（Boogu tokenizer 自动选择 system prompt）。
-- 注意：vae_unit 默认值是 8，选择 flux2klein / flux3klein 时需手动改为 16；建议直接用下方各模型专用 Config 节点。
+- boogu / moss_image / minimax_h3_image 时 `llama_template` 强制为 `""`（这三者的 tokenizer 自动生成 prompt 模板/标签）。
+- 注意：vae_unit 默认值是 8，选择 flux2klein / flux3klein / moss_image 时需手动改为 16、选择 minimax_h3_image 时改为 32；建议直接用下方各模型专用 Config 节点。
 
 ### QwenModelConfig_EditUtils
 
@@ -94,6 +95,22 @@ Krea2 管线专用配置。固定返回 `{"model_name": "qwen", "vae_unit": 8, "
 - **为什么 model_name 是 `"qwen"`**：Krea2 的文本编码器基于 Qwen、VAE 是 Qwen-Image 的 VAE，因此 `EditTextEncode` 应走 qwen 编码分支（vae_unit=8）；`config_for: "krea2"` 仅作来源标识（日志/调试用）。
 - 配合 Krea2 管线使用：本节点 → `EditTextEncode` → `Krea2EditApply` 打补丁的模型。
 
+### MossImageModelConfig_EditUtils
+
+**显示名**：EditUtils: MOSS-Image Model Config lrzjason
+MOSS-Image 管线专用配置。固定返回 `{"model_name": "moss_image", "vae_unit": 16, "llama_template": "", "config_for": "moss_image"}`。
+
+| 输入 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| instruction | STRING (optional, multiline) | `""` | **被忽略**（MOSS-Image tokenizer 自动构造 chat 模板：user turn + 开放式 `<think>` 块） |
+
+- 输出：`model_config` (DICT)，供 `EditTextEncode_EditUtils` 使用。
+- **为什么 vae_unit=16**：MOSS-Image 使用 FLUX.2 packed VAE（128 潜通道、16 像素/token），参考图按 16 像素对齐后 `vae.encode` 得到 `[B,128,H/16,W/16]`。
+- **为什么有 VL**：MOSS-Image 的文本编码器是带视觉塔的 Qwen3.5-9B，参考图会以 `Picture n: <|vision_start|><|image_pad|><|vision_end|>` 的形式进入 prompt（与 Krea2 一样同时提供语义 grounding 和 VAE latent）。
+- **为什么 `llama_template` 为空**：MOSS tokenizer 自己套 user/think 模板并负责插入 vision block；传自定义模板反而不会插入参考图对应的 vision block。
+- 配合 MOSS 管线使用：本节点 → `MossImageConfigPreparer`（16px / center-fit / 黑边默认）→ `EditTextEncode` → `MossImageEditApply` 打补丁的模型。
+- 需要 ComfyUI 已内置 MOSS-Image 支持（`image_model="moss_image"`，`CLIPLoader` 类型 `moss_image`）。
+
 ### QwenImage21ModelConfig_EditUtils
 
 **显示名**：EditUtils: QwenImage 2.1 Model Config lrzjason
@@ -108,6 +125,20 @@ Qwen-Image 2.1 专用配置：固定 `model_name="qwen_image21"`、`vae_unit=16`
 - 与 Qwen（1.0）不同：VL 视觉塔输入就是缩放后的参考图本身（无独立 vl 缩放管线）；ref latent 会被拼接进文本序列的 vision slot（`image_slots`）。
 - 需要已支持 Qwen-Image 2.1 的 ComfyUI（上游 `qwen_image21` 支持）才能加载模型。
 
+### MinimaxH3ImageModelConfig_EditUtils
+
+**显示名**：EditUtils: Minimax H3 Image Model Config lrzjason
+MiniMax-H3-Image（`image_model="minimax_h3_image"`，H3 家族的**图像**模型，不是 H3 视频/音频模型）专用配置：固定 `model_name="minimax_h3_image"`、`vae_unit=32`、`llama_template=""`。
+
+| 输入 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| instruction | STRING (optional, multiline) | `""` | 无效项，仅为兼容其它 Config 节点的接线；H3 的 tokenizer 没有 chat template（表现层是纯文本 + `"Picture n: "` 标签），填了会被忽略并打印提示 |
+
+- 输出：`model_config` (DICT) — `{model_name, vae_unit, llama_template, config_for}`。
+- **为什么 vae_unit=32**：H3I 的 VAE 是 16 像素 / 24 通道，但 DiT 对 latent 再做 2×2 patch，因此可表示的画布边长是 **32 px** 的整数倍；ComfyUI 官方节点给编辑参考图对齐的也正是 32 px。
+- H3I 的 checkpoint 是 **6 步 PDD 蒸馏**（`pdd_sigmas` 7 点网格，CFG 烘焙进权重），这些参数来自 checkpoint 本身，本节点只负责路由。
+- 参考图走 `minimax_refs` 条件键，目标 latent 为单帧 24 通道 `[1, 24, 1, H/16, W/16]`；ComfyUI 核心的 `MiniMaxH3Image` 原生消费，**不需要模型补丁**。
+
 ---
 
 ## 二、文本/图像编码节点（Text Encode）
@@ -115,7 +146,7 @@ Qwen-Image 2.1 专用配置：固定 `model_name="qwen_image21"`、`vae_unit=16`
 ### EditTextEncode_EditUtils
 
 **显示名**：EditUtils: EditTextEncode lrzjason
-核心统一编码节点。按 `model_config.model_name` 分流到 Qwen / Flux2Klein / Flux3Klein（共用代码路径）或 Boogu（独立早返回路径）逻辑。
+核心统一编码节点。按 `model_config.model_name` 分流到 Qwen / Flux2Klein / Flux3Klein / MOSS-Image / MiniMax-H3-Image（共用代码路径）或 Boogu（独立早返回路径）逻辑。
 
 | 输入 | 类型 | 默认 | 说明 |
 |---|---|---|---|
@@ -128,15 +159,18 @@ Qwen-Image 2.1 专用配置：固定 `model_name="qwen_image21"`、`vae_unit=16`
 - 输出 7 个：`conditioning` (CONDITIONING) · `latent` (LATENT) · `custom_output` (ANY dict) · `main_image` (IMAGE) · `mask` (MASK) · `pad_info` (ANY dict) · **`prompt` (STRING)**。
 - **`prompt` 输出**：**实际送进 tokenizer 的那段文本**，直接接线到文本预览 / SaveText 节点即可核对模型到底收到了什么。
   - `flux3klein`：用户 prompt **+ bbox 元素表**（与 `custom_output["composed_prompt"]` 完全一致）；
-  - `qwen` / `qwen_image21` / `flux2klein`：带 `Picture n: <|vision_start|>…` 前缀的 prompt；
+  - `qwen` / `qwen_image21` / `flux2klein` / `moss_image`：带 `Picture n: <|vision_start|>…` 前缀的 prompt（`moss_image` 的 tokenizer 会自动补自己的 chat 模板）；
+  - `minimax_h3_image`：用户原样 prompt（`"Picture n: "` 标签由 tokenizer 生成）；
   - `boogu`：原样 prompt（Boogu tokenizer 自行选择 system prompt）。
   - 该输出**追加在最后一位**：ComfyUI 按槽位序号匹配已保存的连线，放在末尾可保证现有工作流的输出连接不受影响。
 
-**Qwen / Flux2Klein / Flux3Klein 路径行为**
-- 对每张 `to_ref` 的图：按 `ref_longest_edge` + `ref_resize_mode` 缩放，按 `vae_unit` 对齐，`ref_crop="pad"` 时补齐到 vae_unit 倍数（主图生成 `pad_info`），然后 `vae.encode` 得到 ref latent。补齐区域的填充方式由 config 的 `pad_mode` / `pad_color` / `pad_color_rgb` / `pad_noise` 控制（qwen 系默认白边，flux2klein / flux3klein 默认黑边）。
+**Qwen / Flux2Klein / Flux3Klein / MOSS-Image 路径行为**
+- 对每张 `to_ref` 的图：按 `ref_longest_edge` + `ref_resize_mode` 缩放，按 `vae_unit` 对齐，`ref_crop="pad"` 时补齐到 vae_unit 倍数（主图生成 `pad_info`），然后 `vae.encode` 得到 ref latent。补齐区域的填充方式由 config 的 `pad_mode` / `pad_color` / `pad_color_rgb` / `pad_noise` 控制（qwen 系默认白边，flux2klein / flux3klein / moss_image 默认黑边）。
 - 全部 ref latents 以 `reference_latents` 键挂到 conditioning 上（`node_helpers.conditioning_set_values`），采样模型据此读取。**这就是 EditUtils 条件链。**
-- `latent` 输出 = 主图（`ref_main_image`）的 ref latent；无图时为 1×4×128×128 零 latent（qwen_image21 为 1×64×128×128，flux3klein 为 1×128×128×128）。
+- `latent` 输出 = 主图（`ref_main_image`）的 ref latent；无图时为 1×4×128×128 零 latent（qwen_image21 为 1×64×128×128，flux3klein / moss_image 为 1×128×128×128）。
 - Qwen 的 `to_vl` 图还会缩放到 `vl_target_size` 面积喂给 QwenVL，并在 prompt 前自动拼 `Picture n: <|vision_start|>...`；Flux2Klein 忽略 VL（代码中 `to_vl` 强制 False）。
+- **MOSS-Image 额外**：与 Qwen 一样支持 `to_vl`（`Picture n:` + vision block 进入带视觉塔的 Qwen3.5-9B），但 `llama_template` 必须为空——`moss_image` tokenizer 自己构造 chat 模板并插入 vision block。`to_vl=False` 时参考图只以 VAE latent 参与，prompt 前不会出现 `Picture n:`。不写 `reference_rope_offsets`（MOSS 补丁用 4 轴 RoPE 的 `r` 轴区分参考图）。`custom_output` 里给出 `vl_images` 与带前缀的 `full_prompt`。
+- **MiniMax-H3-Image 额外**：每张图同时编码 **vision 副本**（短边 = `ref_short_edge`，默认 1024，等比不裁）与 **VAE 参考 latent**（短边钳到 `[ref_short_edge, ref_max_short_edge]`、两侧取整到 32 px）。token 化时把 vision 副本作为 `images=` 交给 tokenizer，并传 `picture_label="Picture %d: "`（tokenizer 自己拼标签与 vision block，prompt 里手写标签会重复）；ref latent 以 `minimax_refs` 键挂到 conditioning（`[{"kind": "image", "latent_h", "latent_w", "latent"}]`），**不写** `reference_latents` / `reference_rope_offsets`（H3I 的参考位置由 `PackedLayout` 按块序推导）。`latent` 输出为主图 ref latent 的 24 通道单帧乘以主图的 `scale_up`；无图时为 `1×24×1×128×128`（2048²）。像素 mask 不支持，会被忽略。
 - **Flux3Klein 额外**：`to_vl` 同样强制 False（参考图是纯 VAE 潜变量、没有 vision slot）；不写 `reference_rope_offsets`（FLUX.3 自己推导参考位置 id）；若某个 config 带 bbox 元素表，会把该表拼到 prompt 末尾，并在 `custom_output` 里给出 `composed_prompt` 与 `bbox_rows`。
 - 主图带 mask 时，`latent` 附带 `noise_mask`，并从 `mask` 输出返回。
 - 只会有一个主图：后续 config 的 `ref_main_image` 会被强制改为 False；都不设主图时自动取第 0 张并打印提示。
@@ -227,6 +261,24 @@ FLUX.3 Klein 简易一体化编码节点（vae_unit=16），无 VL 处理。
 - **参考图是纯 VAE 潜变量**，没有 vision slot：`to_vl` 在该路径被强制关闭。
 - 需要完整 7 个输出（含 `pad_info` 与拼好元素表的 `prompt`）时，请直接使用 `EditTextEncode_EditUtils`。
 
+### MinimaxH3ImageEditTextEncode_EditUtils
+
+**显示名**：EditUtils: Minimax H3 Image Edit Text Encode lrzjason
+MiniMax-H3-Image 的一体化简易编码节点（内部构造固定 config 后调用 `EditTextEncode_EditUtils`），最多 3 张图。
+
+| 输入 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| clip | CLIP | — | `CLIPLoader` type `minimax`（Qwen3-VL-32B，截断到第 50 层） |
+| vae | VAE | — | H3I 的 24 通道 / 16 像素 VAE |
+| prompt | STRING (multiline) | — | 用 `<Picture 1>`、`<Picture 2>` … 指代参考图的**结果**描述 |
+| image1/2/3 | IMAGE (optional) | None | image1 是被编辑的主图（其 ref latent 决定目标网格），其余为参考图 |
+| ref_short_edge / _2 / _3 | INT (32–4096, step 32) | 1024 | 各图参考 latent 与 vision 副本的短边 |
+| scale_up | FLOAT (1.0–4.0, step 0.05) | 1.0 | 目标 latent = image1 参考网格 × scale_up。H3I 需要 4–20 MP，1:1 的 4 MP 目标填 2.0 |
+| mask | MASK (optional) | None | H3I 不支持像素 mask，会被忽略并打印提示 |
+
+- 输出 5 个：`conditioning` (CONDITIONING) · `latent` (LATENT) · `custom_output` (ANY) · `main_image` (IMAGE) · `mask` (MASK)。
+- 与 `EditTextEncode_EditUtils` 的 `minimax_h3_image` 路由完全一致：`"Picture n: "` 标签由 tokenizer 生成，不要手写。
+
 ### BooguEditTextEncode_EditUtils
 
 **显示名**：EditUtils: Boogu Edit Text Encode lrzjason
@@ -279,6 +331,38 @@ Boogu 简易一体化编码节点，直接输出正负双条件。
 | pad_noise | FLOAT (0–0.2) | 0.0 | **只**加到填充区域的高斯抖动（std），图像内容不受影响；0.02–0.05 可打散纯平区域 |
 
 - 输出：`configs` (LIST) · `config` (ANY，当前图的配置)。
+- **MOSS-Image 也使用本节点**：MOSS 的文本编码器同样带视觉塔，`to_vl=True` 时参考图会以 `Picture n:` 形式进入 prompt；`ref_longest_edge` 建议设成 16 的倍数（节点内部按 `EditTextEncode` 的 `vae_unit=16` 自动对齐）。MOSS 训练默认黑边，可把 `pad_color` 改为 `black`。
+- MOSS 有专用节点 `MossImageConfigPreparer_EditUtils`（默认就是 16px / center-fit / 黑边），推荐 MOSS 管线直接使用它。
+
+### MossImageConfigPreparer_EditUtils
+
+**显示名**：EditUtils: MOSS-Image Config Preparer lrzjason
+MOSS-Image 每图配置。它结合了两种模型的特征：文本编码器是**带视觉塔的 Qwen3.5-9B**（保留 Qwen 式 `Picture n:` grounding），VAE 是 **FLUX.2 packed VAE**（128 通道、16 像素/token）。
+
+| 输入 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| image | IMAGE | — | |
+| configs | LIST (optional) | None | 上游 configs 链 |
+| to_ref | BOOLEAN | True | 是否进参考 latent |
+| ref_main_image | BOOLEAN | True | 是否主图（其 latent 作为采样初始 latent，并生成 pad_info） |
+| ref_longest_edge | INT (16–4096, step 16) | 1024 | 参考目标尺寸，对齐 16 像素倍数（FLUX.2 VAE） |
+| ref_crop | COMBO: `pad`/`center`/`disabled` | `center` | center = 保持长宽比的贴合 + 最小中心裁剪（默认，最接近编辑训练）；pad = 补到 /16 画布；disabled = 不裁剪直接缩放 |
+| ref_upscale | COMBO: `lanczos`/`bicubic`/`area` | `lanczos` | |
+| to_vl | BOOLEAN | True | 参考图是否进 Qwen3.5 视觉塔（`Picture n:` grounding）。训练配方保持开启 |
+| vl_resize | BOOLEAN | True | VL 前是否缩放 |
+| vl_target_size | INT (384–2048) | 384 | VL 目标面积基准 |
+| vl_crop | COMBO: `center`/`disabled` | `center` | |
+| vl_upscale | COMBO: `lanczos`/`bicubic`/`area` | `bicubic` | 缩小图像时 bicubic/area 通常优于 lanczos |
+| pad_mode | COMBO: `color`/`edge`/`mirror`/`border_mean` | `color` | ref_crop=pad 时的填充方式 |
+| pad_color | COMBO: `red`/`green`/`blue`/`white`/`black`/`custom` | `black` | MOSS/FLUX.2 默认黑边 |
+| pad_color_rgb | STRING | `-` | 可选 6 位 hex 覆盖 pad_color |
+| pad_noise | FLOAT (0–0.2) | 0.0 | 只加到填充区域的高斯抖动 |
+| mask | MASK (optional) | None | |
+| ref_resize_mode | COMBO: `longest_edge`/`area` | `longest_edge` | longest_edge=最长边对齐；area=总面积对齐 ref_longest_edge² |
+
+- 输出：`configs` (LIST) · `config` (ANY，当前图的配置)。
+- **没有 `rope_x_offset` / `rope_y_offset`**：MOSS 补丁用 4 轴 RoPE 的 `r` 轴区分参考图，没有 Krea2/Qwen 那种逐参考空间偏移的消费者。
+- 多张参考图：串联多个本节点；主图（`ref_main_image=True`）的 latent 会作为 `EditTextEncode` 的 `latent` 输出。
 
 ### QwenImage21ConfigPreparer_EditUtils
 
@@ -420,6 +504,33 @@ FLUX.3 的 **bounding box（元素表）画布节点**，独立于 Config Prepar
 
 **提示**：id 要在描述里以 `<id>` 引用（如 `<silhouette_1>`）；框是**引导而非裁剪遮罩**，元素可以略微超出；新建元素不要给太小的框（约 40×25 px 常不出现）；`editing` 时说明与表格要一致，需要固定不动的元素就补一行 Keep。
 
+### MinimaxH3ImageConfigPreparer_EditUtils
+
+**显示名**：EditUtils: Minimax H3 Image Config Preparer lrzjason
+MiniMax-H3-Image 的每图配置节点。同一张参考图会喂给两个消费者：Qwen3-VL 看 **1024 短边的 vision 副本**，DiT 看 **24 通道 VAE latent**。
+
+| 输入 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| image | IMAGE | — | 该图的图像 |
+| configs | LIST (optional) | None | 已有的配置链；接上即可串联多张图 |
+| to_ref | BOOLEAN | True | 编码为该图的参考 latent（写进 `minimax_refs`） |
+| ref_main_image | BOOLEAN | True | 该图是**被编辑的主图**（其 latent 决定目标网格）；链里只有第一个生效 |
+| ref_short_edge | INT (32–4096, step 32) | 1024 | 参考 latent 与 vision 副本的短边（ComfyUI 官方值 1024） |
+| ref_max_short_edge | INT (32–8192, step 32) | 2048 | 短边上限钳制（ComfyUI 官方值 2048），大图只缩到这里 |
+| scale_up | FLOAT (1.0–4.0, step 0.05) | 1.0 | **仅主图有效**：目标 latent = 该图参考网格 × scale_up（保持 32 px 对齐） |
+| ref_crop | COMBO: `disabled`/`center`/`pad` | `disabled` | `disabled` = ComfyUI 的参考图行为（等比缩放、不裁不补）；`center` 最小中心裁剪；`pad` 补到 32 px 画布 |
+| ref_upscale | COMBO: `lanczos`/`bicubic`/`area` | `lanczos` | 参考图缩放滤镜 |
+| to_vl | BOOLEAN | True | 把 vision 副本交给 Qwen3-VL，tokenizer 生成 `"Picture n: " + <vision block>` |
+| vl_crop | COMBO: `disabled`/`center` | `disabled` | vision 副本的裁剪方式（`disabled` 与 ComfyUI 一致） |
+| vl_upscale | COMBO: `lanczos`/`bicubic`/`area` | `bicubic` | vision 副本的缩放滤镜 |
+| pad_mode / pad_color / pad_color_rgb / pad_noise | — | `color` / `black` / `-` / 0.0 | 仅在 `ref_crop="pad"` 时生效，语义与其它 Preparer 相同 |
+| mask | MASK (optional) | None | H3I 不支持像素 mask，编码时忽略 |
+
+- 输出：`configs` (LIST) · `config` (ANY dict)。
+- 尺寸规则与 ComfyUI `_size_short_edge` 一致：短边钳到 `[ref_short_edge, ref_max_short_edge]`，两侧都取整到 32 px，因此 VAE latent 一定为偶数（DiT 的 2×2 patch 能整除）。
+- **H3I 训练在 4–20 MP**（最佳约 16 MP）；1 MP 目标会出海报式乱码。参考图约 1 MP 最合适，所以「参考小、目标大」是常态：参考留在 1024 短边，用主图的 `scale_up`（如 2.0）把目标放大到约 4 MP。
+- 用 `ConfigJsonParser_EditUtils` 搭 H3I 图时，可在 JSON 里追加 `ref_short_edge` / `ref_max_short_edge` / `scale_up`；不写则按上面的默认值（1024 / 2048 / 1.0）。
+
 ### BooguConfigPreparer_EditUtils
 
 **显示名**：EditUtils: Boogu Config Preparer lrzjason
@@ -484,6 +595,22 @@ FLUX.3 的 **bounding box（元素表）画布节点**，独立于 Config Prepar
 - 输入：`custom_output` (ANY)。
 - 输出 10 个：`pad_info` (ANY) · `main_image` (IMAGE) · `vae_images` (LIST) · `ref_latents` (LIST) · `full_prompt` (STRING) · `no_refs_cond` (CONDITIONING) · `mask` (MASK) · `flow_map` (BOOLEAN，该 checkpoint 是否 flow-map/step-distilled) · `bbox_rows` (LIST，本次解析出的元素表行) · `composed_prompt` (STRING，**已把元素表拼进去的完整 prompt**)。
 
+### MinimaxH3ImageOutputExtractor_EditUtils
+
+**显示名**：EditUtils: Minimax H3 Image Output Extractor lrzjason
+把 `EditTextEncode_EditUtils` 的 `custom_output` 拆成独立输出。
+
+| 输出 | 类型 | 说明 |
+|---|---|---|
+| pad_info | ANY | 主图 `ref_crop="pad"` 时的填充信息 |
+| main_image | IMAGE | 主图（`ref_main_image`）的参考图 |
+| vae_images | LIST | 所有参考图（缩放后） |
+| ref_latents | LIST | 所有参考 latent |
+| full_prompt | STRING | 用户 prompt（`"Picture n: "` 标签由 tokenizer 生成，不在这里） |
+| no_refs_cond | CONDITIONING | 未挂参考的文本条件 |
+| mask | MASK | 像素 mask（H3I 恒为 None） |
+| minimax_refs | LIST | 实际递给模型的 `minimax_refs`（每项含 `kind` / `latent_h` / `latent_w` / `latent`） |
+| target_size | LIST | 目标 latent 的像素尺寸 `[width, height]`，便于确认是否达到 4 MP |
 ### BooguOutputExtractor_EditUtils
 
 **显示名**：EditUtils: Boogu Output Extractor lrzjason
@@ -493,7 +620,7 @@ FLUX.3 的 **bounding box（元素表）画布节点**，独立于 Config Prepar
 
 ---
 
-## 五、模型补丁（Krea2 / QwenImage / QwenImage 2.1 / Flux2Klein / Flux3Klein / Boogu）
+## 五、模型补丁（Krea2 / MOSS-Image / QwenImage / QwenImage 2.1 / Flux2Klein / Flux3Klein / MiniMax-H3-Image / Boogu）
 
 ### Krea2EditApply_EditUtils
 
@@ -517,6 +644,32 @@ FLUX.3 的 **bounding box（元素表）画布节点**，独立于 Config Prepar
 - **ref_strength 语义**：实现于缓存 forward 内，根据 `transformer_options["sigmas"]` 计算采样进度；`progress >= ref_strength` 时跳过 ref K/V 拼接（数学上等价于无 ref forward）。进度按 sigma 进度而非步数计算。`debug_log=True` 时首次丢弃会打印 `[Krea2EditApply] ref dropped at progress=...`。
 - **用途**：避免 ref latent 过度约束模型——采样前段保留 ref 的结构/身份，后段释放细节与创意。**0.5~0.7 是建议的实验区间**；该调度属于训练分布外（OOD）行为，效果需肉眼验收，不保证所有 prompt/ref 组合都有正面收益。
 - 原独立节点 `Krea2RefKVCache_EditUtils` 已删除，缓存功能由 `ref_kv_cache` 选项内置。
+
+### MossImageEditApply_EditUtils
+
+**显示名**：EditUtils: MOSS-Image Edit Apply (Model Patch) lrzjason
+把 MOSS-Image（`comfy/ldm/moss_image/model.py`）补丁成支持参考图输入生成：参考图 latent 作为干净的额外 token 追加到序列末尾，按 4 轴 RoPE 的 `r` 轴区分，并以 t=0 调制。**用户只需连 model 线**——参考图 latent 通过 EditUtils 条件链（conditioning 上的 `reference_latents`）经 `extra_conds` 补丁自动流入。
+
+| 输入 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| model | MODEL | — | MOSS-Image 模型；检测不通过（非 MOSS）时原样返回，不打补丁 |
+| ref_kv_cache | BOOLEAN (optional) | True | 参考图 KV 缓存：先用一次 t=0 的 ref-only 前向预计算每层 ref K/V，之后每个去噪步把它们拼进 attention 的 K/V。对应 ai-toolkit `kv_cache` 训练模式（MOSS-Image edit LoRA 的默认）。**若 LoRA 训练时 `kv_cache=false`，请关闭**——此时参考 token 会留在序列里并 attend 文本 + 噪声图 |
+| ref_strength | FLOAT (optional, 0.0–1.0, step 0.05) | 1.0 | 参考图约束时长。1.0=全程参与（默认）；0.5=只参与采样进度前 50%，之后走纯文生图；0.0=参考图完全不参与 |
+| reset_cache | BOOLEAN (optional) | True | 每次节点执行时清空 ref K/V 缓存（重新预计算）；同一次采样内步骤间仍复用 |
+| debug_log | BOOLEAN (optional) | False | 打印模型检测、ref K/V 捕获/复用、ref 丢弃日志 |
+
+- 输出：`model` (MODEL)。
+- 补丁通过 `model.clone()` + `add_object_patch` 隔离安装（`extra_conds` / `extra_conds_shapes` / `memory_usage_factor_conds` / `diffusion_model.forward`），不影响原模型实例。
+- **序列顺序**：`[target image | text | ref₁ | ref₂ | …]`（MOSS 原生是 `[target image | text]`）。
+- **RoPE 4 轴坐标 `(r, f, h, w)`**：target image = `(0, text_len, h/w 居中)`；text = `(0, 0..text_len-1, 0, 0)`；refₙ = `(n, text_len, 自己的 h/w 居中网格)`。这与 MOSS 官方 `_RoPE`（image 的 `f=text_length`、h/w 居中）逐位一致，参考图只借用基础模型空置的 `r` 轴。
+- **逐 token 时间步**：target image + text 使用真实 t 的 6 路 adaLN 调制；参考 token 使用 t=0 的调制（`index_timestep_zero` 参考法）。每个 block 的 attention/FFN 都对 `[0:split]` 和 `[split:]` 两段分别做 modulated RMSNorm 与 gated residual。
+- **输出裁剪**：`final_linear_video` 只作用于 target image token，预测形状仍为 `[B,128,H,W]`。
+- **多参考图**：ref₁=r1、ref₂=r2…，按传入顺序编号；参考图 latent 必须是 128 通道（MOSS/FLUX.2 VAE）。
+- **缓存开销**：ref K/V 存在 CPU（不占显存）；4096 个参考 token 约 2GB，按 `(batch, 分辨率, 文本长度, 跳过的 block)` 分别缓存，最多保留 4 份。1MP 左右的参考图是推荐范围。
+- **aimdo malloc graph**：本补丁的 block 循环**不启用** aimdo 的 per-thread malloc graph（native MOSS forward 会启用）。原因是参考预计算 pass 与实时 pass、正/负条件的 token 数不同，分配图 replay 会报 `aimdo memory compile error`；weight prefetch 队列仍然保留，只是少了分配图这一层优化。
+- **无参考图时自动回退原始 forward**；`ref_kv_cache` 路径预计算/复用异常时不会静默产生错误结果（异常会直接抛出，便于定位）。
+- **与 Krea2 补丁的差异**：MOSS 没有 patchify（latent 直接就是 token 网格）、RoPE 是 4 轴而非 3 轴、文本与图像共享同一组 block，因此这里按 MOSS 原生 block 结构重写，而不是复用 Krea2 的 `_forward`。
+- 需要 ComfyUI 已内置 MOSS-Image 支持（`image_model="moss_image"`，`CLIPLoader` 类型 `moss_image`）。
 
 ### QwenImage21EditApply_EditUtils
 
@@ -549,6 +702,23 @@ FLUX.3 Klein 编辑路径的模型校验节点。**与 Flux2KleinEditApply 不�
 - **为什么不需要打补丁**：ComfyUI 核心的 `comfy/model_base.py class Flux3` 已原生消费 `reference_latents`，并交给 `comfy/ldm/flux3/model.py`；模型自己用 `ref_ids` 推导参考位置 id（`l` 轴负坐标 -1, -2, …，`image_rope_scale = 0.5`）。EditUtils 的 `reference_rope_offsets` 在该架构上没有消费者，因此编码节点不写这个键。
 - 检测依据：模型带有 `content_mode_blocks` / `txt_mode_blocks` / `single_blocks` / `ref_ids`。
 - **用途**：给 FLUX.3 图一个与其他 EditUtils 编辑图一致的外形，并在误接成 FLUX.2 klein 补丁时**明确报错**，而不是静默地拿不到参考条件。
+
+---
+
+### MinimaxH3ImageEditApply_EditUtils
+
+**显示名**：EditUtils: Minimax H3 Image Edit Apply (Model Check) lrzjason
+MiniMax-H3-Image 编辑路径的**模型校验**节点。与 MOSS-Image / Flux2Klein 的补丁不同，它**不重写 forward**：ComfyUI 核心的 `MiniMaxH3Image` 已经原生读取 `minimax_refs`，并交给 `comfy/ldm/minimax/model.py` 处理（`PackedLayout` 打包 `[文本 | 参考行 | 目标行]`，参考行每步在 `t=0.999` 重新注入）。
+
+| 输入 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| model | MODEL | — | H3I 模型 |
+| debug_log | BOOLEAN (optional) | True | 打印 checkpoint 的 PDD sigma 网格、该网格隐含的步数、CFG/负面契约 |
+| strict | BOOLEAN (optional) | True | 模型不像 H3-Image 时**抛错**；关闭则打印提示后原样返回 |
+
+- 输出：`model` (MODEL)。
+- **为什么需要它**：H3 的**视频**模型（`minimax_h3`）以及 FLUX / MOSS 等架构都不会读 `minimax_refs`，误接时参考图会被静默忽略；这个节点把这种错误变成明确的报错（也可当诊断用，打印 6 步 / cfg 1.0 契约）。
+- 判断依据：`pdd_sigmas` 存在、`audio_latents_dim is None`（H3 图像模型没有音频流）、`video_patch_proj` 存在。
 
 ---
 
@@ -585,7 +755,7 @@ FLUX.3 Klein 编辑路径的模型校验节点。**与 Flux2KleinEditApply 不�
 ### ClearRefLatents_EditUtils
 
 **显示名**：EditUtils: Clear Ref Latents lrzjason
-把 conditioning 上的 `reference_latents` 置空（其余内容保留）。
+把 conditioning 上的 `reference_latents` 与 `minimax_refs` 置空（其余内容保留）。前者覆盖 Qwen / FLUX / MOSS / Krea2 路径，后者是 MiniMax-H3-Image 的参考 latent 键。
 
 - 输入：`conditioning` (CONDITIONING)。输出：`conditioning` (CONDITIONING)。
 - 用途：复用编码好的文本条件但不想要参考图（例如负面条件、或防止 ref 流向不该去的模型/采样器），也可在保存条件前清掉 ref。
@@ -755,8 +925,11 @@ ANY → LATENT 转换：把张量包成 `{"samples": item}`。
 | 右键点标记 | 删除 |
 | 预设按钮 flat…gigantic | 把**整张图**的标记总面积设到该档实测中位面积，并按两标记当前面积比例分配（保持左右相对大小与形状） |
 | 取色器 | 标记填充色，默认 `#FADBAE` |
-| guide 勾选框 | 把接入的目标图以 45% 透明度垫在黑底上作为对位参考；**只用于对齐，绝不会进入输出像素** |
+| guide 勾选框 | 把接入的目标图以 45% 透明度垫在黑底上作为对位参考；**只用于对齐，绝不会进入输出像素**。默认**关闭**，此时画布显示的就是真实输出（纯黑底 + 标记） |
 | 状态行 | `宽x高 - total X.XX% (档位) - marker i/n: Y.YY% @ 角度°`；档位按**总面积**归类，因为实测的中位面积是两标记合计 |
+
+> **接入的 `image` 只用于取尺寸，不参与成像**：输出始终是一张新的黑底图（`torch.zeros`），逐像素只包含黑色与标记填充色两种颜色，实测喂入任何输入图都不会有一个输入像素出现在输出里。`image` 的唯一作用是决定输出的精确像素尺寸。画布上的 guide 垫图是纯显示层的对位辅助，默认关闭。
+
 
 > **旋转的约定**：角度单位是度，**正数 = 屏幕上顺时针**（y 轴向下，与 `krea2_geom_lab` 的 `_rotated` 约定一致），范围归一化到 `(-180, 180]`。旋转只改变朝向，**不改变面积**，所以不会影响尺寸档与预设；旋转后边手柄/角手柄/命中判定都跟着转，拖拽始终沿椭圆自身的轴生效。换画布长宽比时只补偿 `ry`（保持像素长宽比），角度不变。
 
@@ -794,3 +967,33 @@ ANY → LATENT 转换：把张量包成 `{"samples": item}`。
 - 接 `image` 时输出尺寸与目标逐像素相同（含 batch 取首帧、非 batch 输入报错）；
 - 从 25 张现有 `_bd.json` 的 `box_px` 反算几何重渲染，与真实 `_bd.png` 像素的 IoU：中位 **0.9866**、最小 **0.9757**——与「内切椭圆」模型自身的上限（0.9762–0.9919）一致，即渲染器对数据集的复现精度已经到顶。
 
+
+---
+
+## 代码结构（nodes/ 包）
+
+`nodes.py` 已按节点家族拆成 `nodes/` 包，ComfyUI 依旧从根 `__init__.py` 的 `NODE_CLASS_MAPPINGS` 加载，行为不变。
+
+| 模块 | 内容 |
+|---|---|
+| `_shared.py` | 公共导入、小助手（`get_system_prompt`、`stamp_config_id`、pad 颜色/画布、`minimax_h3_image_ref_size`）与跨家族常量 |
+| `configs.py` | 9 个 Model Config 节点（qwen / flux2klein / flux3klein / boogu / krea2 / moss_image / qwen_image21 / minimax_h3_image + 通用） |
+| `encode.py` | `EditTextEncode_EditUtils`：所有模型共用的唯一编码入口 |
+| `simple_encoders.py` | 6 个一体化编码节点（image1–3），内部调用 `encode.py` |
+| `preparers.py` | 每图配置链（7 个 Config Preparer + `ConfigJsonParser_EditUtils`） |
+| `flux3_bbox.py` | FLUX.3 元素表的解析/序列化助手 + `Flux3KleinBBox_EditUtils` |
+| `extractors.py` | 5 个 `custom_output` 拆包节点 |
+| `apply_krea2.py` | Krea2 模型补丁（参考 token / rope 偏移 / 可选 ref KV cache） |
+| `apply_moss.py` | MOSS-Image 模型补丁（4 轴 RoPE 的 `r` 轴参考 token） |
+| `apply_flux.py` | FLUX.2 klein rope 补丁 + FLUX.3 模型校验 |
+| `apply_qwen.py` | QwenImage / Qwen-Image 2.1 rope 补丁 |
+| `apply_boogu.py` | Boogu 模型补丁 |
+| `apply_minimax.py` | MiniMax-H3-Image 模型校验（无需改 forward） |
+| `image_utils.py` | `CropWithPadInfo` / `LongestEdgeImageProcess` / `DiffMask` / `AlphaNoiseFilter` / `RopeOffsetFromMask` 等图像工具 |
+| `conditions.py` | 条件缓存（`models/conditions`）的 Save/Load 节点 |
+| `breast_size.py` | `BreastSizeControl_EditUtils` 画布节点 |
+| `registry.py` | `NODE_CLASS_MAPPINGS` / `NODE_DISPLAY_NAME_MAPPINGS`，从各模块汇总 |
+| `__init__.py` | 只导出上述两个映射 |
+
+- 每个模块只保留自己用到的导入；跨模块引用显式 `from .xxx import ...`，不依赖通配导入。
+- `scripts/score_rope.py` 会遍历 `nodes/*.py` 拼接后做静态打分，拆分后仍可用。

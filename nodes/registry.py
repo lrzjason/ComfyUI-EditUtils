@@ -1,0 +1,132 @@
+"""NODE_CLASS_MAPPINGS / NODE_DISPLAY_NAME_MAPPINGS assembled from the modules."""
+
+from .apply_boogu import BooguEditApply_EditUtils
+from .apply_flux import Flux2KleinEditApply_EditUtils, Flux3KleinEditApply_EditUtils
+from .apply_krea2 import Krea2EditApply_EditUtils
+from .apply_minimax import MinimaxH3ImageEditApply_EditUtils
+from .apply_moss import MossImageEditApply_EditUtils
+from .apply_qwen import QwenImage21EditApply_EditUtils, QwenImageEditApply_EditUtils
+from .breast_size import BreastSizeControl_EditUtils
+from .conditions import LoadConditionFromLoras_EditUtils, LoadCondition_EditUtils, SaveCondition_EditUtils
+from .configs import BooguModelConfig_EditUtils, Flux2KleinModelConfig_EditUtils, Flux3KleinModelConfig_EditUtils, Krea2ModelConfig_EditUtils, MinimaxH3ImageModelConfig_EditUtils, ModelConfig_EditUtils, MossImageModelConfig_EditUtils, QwenImage21ModelConfig_EditUtils, QwenModelConfig_EditUtils
+from .encode import EditTextEncode_EditUtils
+from .extractors import BooguOutputExtractor_EditUtils, Flux2KleinOutputExtractor_EditUtils, Flux3KleinOutputExtractor_EditUtils, MinimaxH3ImageOutputExtractor_EditUtils, QwenEditOutputExtractor_EditUtils
+from .flux3_bbox import Flux3KleinBBox_EditUtils
+from .image_utils import AdaptiveLongestEdge_EditUtils, AlphaNoiseFilter_EditUtils, Any2Image_EditUtils, Any2Latent_EditUtils, ClearRefLatents_EditUtils, CropWithPadInfo_EditUtils, DiffMask_EditUtils, ListExtractor_EditUtils, LoadImageWithFilename_EditUtils, LongestEdgeImageProcess_EditUtils, RopeOffsetFromMask_EditUtils
+from .preparers import BooguConfigPreparer_EditUtils, ConfigJsonParser_EditUtils, Flux2KleinConfigPreparer_EditUtils, Flux3KleinConfigPreparer_EditUtils, MinimaxH3ImageConfigPreparer_EditUtils, MossImageConfigPreparer_EditUtils, QwenConfigPreparer_EditUtils, QwenImage21ConfigPreparer_EditUtils
+from .simple_encoders import BooguEditTextEncode_EditUtils, Flux2KleinEditTextEncode_EditUtils, Flux3KleinEditTextEncode_EditUtils, MinimaxH3ImageEditTextEncode_EditUtils, QwenEditTextEncode_EditUtils, QwenImage21EditTextEncode_EditUtils
+
+
+NODE_CLASS_MAPPINGS = {
+    "CropWithPadInfo_EditUtils": CropWithPadInfo_EditUtils,
+    "ModelConfig_EditUtils": ModelConfig_EditUtils,
+    "EditTextEncode_EditUtils": EditTextEncode_EditUtils,
+    "QwenModelConfig_EditUtils": QwenModelConfig_EditUtils,
+    "QwenConfigPreparer_EditUtils": QwenConfigPreparer_EditUtils,
+    "QwenEditTextEncode_EditUtils": QwenEditTextEncode_EditUtils,
+    "QwenEditOutputExtractor_EditUtils": QwenEditOutputExtractor_EditUtils,
+    "Flux2KleinModelConfig_EditUtils": Flux2KleinModelConfig_EditUtils,
+    "Flux2KleinConfigPreparer_EditUtils": Flux2KleinConfigPreparer_EditUtils,
+    "Flux2KleinEditTextEncode_EditUtils": Flux2KleinEditTextEncode_EditUtils,
+    "Flux2KleinOutputExtractor_EditUtils": Flux2KleinOutputExtractor_EditUtils,
+    "Flux3KleinModelConfig_EditUtils": Flux3KleinModelConfig_EditUtils,
+    "Flux3KleinConfigPreparer_EditUtils": Flux3KleinConfigPreparer_EditUtils,
+    "Flux3KleinBBox_EditUtils": Flux3KleinBBox_EditUtils,
+    "Flux3KleinEditTextEncode_EditUtils": Flux3KleinEditTextEncode_EditUtils,
+    "Flux3KleinOutputExtractor_EditUtils": Flux3KleinOutputExtractor_EditUtils,
+    "Flux3KleinEditApply_EditUtils": Flux3KleinEditApply_EditUtils,
+    "MinimaxH3ImageModelConfig_EditUtils": MinimaxH3ImageModelConfig_EditUtils,
+    "MinimaxH3ImageConfigPreparer_EditUtils": MinimaxH3ImageConfigPreparer_EditUtils,
+    "MinimaxH3ImageEditTextEncode_EditUtils": MinimaxH3ImageEditTextEncode_EditUtils,
+    "MinimaxH3ImageOutputExtractor_EditUtils": MinimaxH3ImageOutputExtractor_EditUtils,
+    "MinimaxH3ImageEditApply_EditUtils": MinimaxH3ImageEditApply_EditUtils,
+    "BooguModelConfig_EditUtils": BooguModelConfig_EditUtils,
+    "Krea2ModelConfig_EditUtils": Krea2ModelConfig_EditUtils,
+    "MossImageModelConfig_EditUtils": MossImageModelConfig_EditUtils,
+    "MossImageConfigPreparer_EditUtils": MossImageConfigPreparer_EditUtils,
+    "QwenImage21ModelConfig_EditUtils": QwenImage21ModelConfig_EditUtils,
+    "BooguConfigPreparer_EditUtils": BooguConfigPreparer_EditUtils,
+    "BooguEditTextEncode_EditUtils": BooguEditTextEncode_EditUtils,
+    "BooguOutputExtractor_EditUtils": BooguOutputExtractor_EditUtils,
+    "QwenImage21ConfigPreparer_EditUtils": QwenImage21ConfigPreparer_EditUtils,
+    "QwenImage21EditTextEncode_EditUtils": QwenImage21EditTextEncode_EditUtils,
+    "ConfigJsonParser_EditUtils": ConfigJsonParser_EditUtils,
+    "ListExtractor_EditUtils": ListExtractor_EditUtils,
+    "Any2Image_EditUtils": Any2Image_EditUtils,
+    "Any2Latent_EditUtils": Any2Latent_EditUtils,
+    "AdaptiveLongestEdge_EditUtils": AdaptiveLongestEdge_EditUtils,
+    "LoadImageWithFilename_EditUtils": LoadImageWithFilename_EditUtils,
+    "LongestEdgeImageProcess_EditUtils": LongestEdgeImageProcess_EditUtils,
+    "ClearRefLatents_EditUtils": ClearRefLatents_EditUtils,
+    "SaveCondition_EditUtils": SaveCondition_EditUtils,
+    "LoadCondition_EditUtils": LoadCondition_EditUtils,
+    "LoadConditionFromLoras_EditUtils": LoadConditionFromLoras_EditUtils,
+    "DiffMask_EditUtils": DiffMask_EditUtils,
+    "AlphaNoiseFilter_EditUtils": AlphaNoiseFilter_EditUtils,
+    "RopeOffsetFromMask_EditUtils": RopeOffsetFromMask_EditUtils,
+    "Krea2EditApply_EditUtils": Krea2EditApply_EditUtils,
+    "MossImageEditApply_EditUtils": MossImageEditApply_EditUtils,
+    "Flux2KleinEditApply_EditUtils": Flux2KleinEditApply_EditUtils,
+    "QwenImageEditApply_EditUtils": QwenImageEditApply_EditUtils,
+    "QwenImage21EditApply_EditUtils": QwenImage21EditApply_EditUtils,
+    "BooguEditApply_EditUtils": BooguEditApply_EditUtils,
+    "BreastSizeControl_EditUtils": BreastSizeControl_EditUtils,
+}
+
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "CropWithPadInfo_EditUtils": "EditUtils: Crop With Pad Info lrzjason",
+    "ModelConfig_EditUtils": "EditUtils: Model Config lrzjason",
+    "EditTextEncode_EditUtils": "EditUtils: EditTextEncode lrzjason",
+    "QwenModelConfig_EditUtils": "EditUtils: Qwen Model Config lrzjason",
+    "QwenConfigPreparer_EditUtils": "EditUtils: Qwen Config Preparer lrzjason",
+    "QwenEditTextEncode_EditUtils": "EditUtils: Qwen Edit Text Encode lrzjason",
+    "QwenEditConfigPreparer_EditUtils": "EditUtils: Qwen Edit Config Preparer lrzjason",
+    "QwenEditOutputExtractor_EditUtils": "EditUtils: Qwen Edit Output Extractor lrzjason",
+    "Flux2KleinModelConfig_EditUtils": "EditUtils: Flux2Klein Model Config lrzjason",
+    "Flux2KleinConfigPreparer_EditUtils": "EditUtils: Flux2Klein Config Preparer lrzjason",
+    "Flux2KleinEditTextEncode_EditUtils": "EditUtils: Flux2Klein Edit Text Encode lrzjason",
+    "Flux2KleinOutputExtractor_EditUtils": "EditUtils: Flux2Klein Output Extractor lrzjason",
+    "Flux3KleinModelConfig_EditUtils": "EditUtils: Flux3Klein Model Config lrzjason",
+    "Flux3KleinConfigPreparer_EditUtils": "EditUtils: Flux3Klein Config Preparer lrzjason",
+    "Flux3KleinBBox_EditUtils": "EditUtils: Flux3Klein BBox (Element Table) lrzjason",
+    "Flux3KleinEditTextEncode_EditUtils": "EditUtils: Flux3Klein Edit Text Encode lrzjason",
+    "Flux3KleinOutputExtractor_EditUtils": "EditUtils: Flux3Klein Output Extractor lrzjason",
+    "Flux3KleinEditApply_EditUtils": "EditUtils: Flux3Klein Edit Apply (Model Check) lrzjason",
+    "MinimaxH3ImageModelConfig_EditUtils": "EditUtils: Minimax H3 Image Model Config lrzjason",
+    "MinimaxH3ImageConfigPreparer_EditUtils": "EditUtils: Minimax H3 Image Config Preparer lrzjason",
+    "MinimaxH3ImageEditTextEncode_EditUtils": "EditUtils: Minimax H3 Image Edit Text Encode lrzjason",
+    "MinimaxH3ImageOutputExtractor_EditUtils": "EditUtils: Minimax H3 Image Output Extractor lrzjason",
+    "MinimaxH3ImageEditApply_EditUtils": "EditUtils: Minimax H3 Image Edit Apply (Model Check) lrzjason",
+    "BooguModelConfig_EditUtils": "EditUtils: Boogu Model Config lrzjason",
+    "Krea2ModelConfig_EditUtils": "EditUtils: Krea2 Model Config lrzjason",
+    "MossImageModelConfig_EditUtils": "EditUtils: MOSS-Image Model Config lrzjason",
+    "MossImageConfigPreparer_EditUtils": "EditUtils: MOSS-Image Config Preparer lrzjason",
+    "QwenImage21ModelConfig_EditUtils": "EditUtils: QwenImage 2.1 Model Config lrzjason",
+    "BooguConfigPreparer_EditUtils": "EditUtils: Boogu Config Preparer lrzjason",
+    "BooguEditTextEncode_EditUtils": "EditUtils: Boogu Edit Text Encode lrzjason",
+    "BooguOutputExtractor_EditUtils": "EditUtils: Boogu Output Extractor lrzjason",
+    "QwenImage21ConfigPreparer_EditUtils": "EditUtils: QwenImage 2.1 Config Preparer lrzjason",
+    "QwenImage21EditTextEncode_EditUtils": "EditUtils: QwenImage 2.1 Edit Text Encode lrzjason",
+    "ConfigJsonParser_EditUtils": "EditUtils: Config Json Parser lrzjason",
+    "ListExtractor_EditUtils": "EditUtils: List Extractor lrzjason",
+    "Any2Image_EditUtils": "EditUtils: Any2Image lrzjason",
+    "Any2Latent_EditUtils": "EditUtils: Any2Latent lrzjason",
+    "AdaptiveLongestEdge_EditUtils": "EditUtils: Adaptive Longest Edge lrzjason",
+    "LoadImageWithFilename_EditUtils": "EditUtils: Load Image With Filename lrzjason",
+    "LongestEdgeImageProcess_EditUtils": "EditUtils: Longest Edge Image Process lrzjason",
+    "ClearRefLatents_EditUtils": "EditUtils: Clear Ref Latents lrzjason",
+    "SaveCondition_EditUtils": "EditUtils: Save Condition lrzjason",
+    "LoadCondition_EditUtils": "EditUtils: Load Condition lrzjason",
+    "LoadConditionFromLoras_EditUtils": "EditUtils: Load Condition From Loras lrzjason",
+    "DiffMask_EditUtils": "EditUtils: Diff Mask lrzjason",
+    "AlphaNoiseFilter_EditUtils": "EditUtils: Alpha Noise Filter lrzjason",
+    "RopeOffsetFromMask_EditUtils": "EditUtils: ROPE Offset From Mask lrzjason",
+    "Krea2EditApply_EditUtils": "EditUtils: Krea2 Edit Apply (Model Patch) lrzjason",
+    "MossImageEditApply_EditUtils": "EditUtils: MOSS-Image Edit Apply (Model Patch) lrzjason",
+    "Flux2KleinEditApply_EditUtils": "EditUtils: Flux2Klein Edit Apply (ROPE Control) lrzjason",
+    "QwenImageEditApply_EditUtils": "EditUtils: QwenImage Edit Apply (ROPE Control) lrzjason",
+    "QwenImage21EditApply_EditUtils": "EditUtils: QwenImage 2.1 Edit Apply (ROPE Control) lrzjason",
+    "BooguEditApply_EditUtils": "EditUtils: Boogu Edit Apply (ROPE Control) lrzjason",
+    "BreastSizeControl_EditUtils": "EditUtils: Breast Size Control (Canvas) lrzjason",
+}

@@ -2,10 +2,12 @@
 
 [English](README.md) | [简体中文](README_zh.md)
 
-A collection of utility nodes for advanced image editing in ComfyUI, supporting multiple AI models including Qwen, Qwen-Image 2.1, Flux2Klein, Flux3Klein and Krea2.
+A collection of utility nodes for advanced image editing in ComfyUI, supporting multiple AI models including Qwen, Qwen-Image 2.1, Flux2Klein, Flux3Klein, Krea2, MOSS-Image and MiniMax-H3-Image.
 
 ## Update
 
+- **20261119** Added **MiniMax-H3-Image** support (`minimax_h3_image` route) — the **image** model of the MiniMax H3 family, not the H3 video model. `MinimaxH3ImageModelConfig_EditUtils` (`vae_unit=32`, empty template) + `MinimaxH3ImageConfigPreparer_EditUtils` (short-edge reference sizing 1024/2048, `scale_up` target multiplier, vision copy) + a `minimax_refs` routing branch in `EditTextEncode_EditUtils` + `MinimaxH3ImageOutputExtractor_EditUtils` + `MinimaxH3ImageEditApply_EditUtils` (model check, no patch). Requires a ComfyUI build with native H3-Image support. Working example: [minimax h3 image editutils example.json](workflows/minimax%20h3%20image%20editutils%20example.json). See [MiniMax-H3-Image](#minimax-h3-image).
+- **20261019** Added **MOSS-Image** reference-edit support: `MossImageModelConfig_EditUtils` (FLUX.2 VAE, `vae_unit=16`, Qwen3.5-VL prompt grounding) + `MossImageConfigPreparer_EditUtils` (16 px / center-fit / black-pad defaults) + `MossImageEditApply_EditUtils` — a Krea2-style **model patch** that appends clean reference tokens after the text on the 4-axis RoPE `r` axis at `t=0`, with an optional ai-toolkit-compatible `ref_kv_cache`. See [MOSS-Image](#moss-image).
 - **20261016** Added **FLUX.3 Klein** support (`flux3klein` route) with a **bounding-box editor**: the `Flux3Klein*` nodes plus a draw-your-layout canvas on `Flux3KleinBBox_EditUtils`. Draw a box on the reference, type its **id** and **desc**, and the node appends the FLUX.3 element table as a JSON array to the prompt — `generation` rows (`{id, bbox, desc}`) for layout, `editing` rows (`{id, from, src_bbox, tgt_bbox, desc}`) for keep/move/create/remove. Requires a ComfyUI build with FLUX.3 support. Working example: [flux3 editutils example.json](workflows/flux3%20editutils%20example.json).
 - **20261015** Added **BreastSizeControl_EditUtils** — draw a breast-size control (`_bd`) condition image on the node's own canvas: black background, one or two `#FADBAE` ellipses you can move, shape (circle ⇄ ellipse), **rotate** and colour, with the measured flat/small/medium/large/huge/gigantic areas one button away. The marker's area is the size dial. Working Krea2 example: [k2 breasts size control.json](workflows/k2%20breasts%20size%20control.json).
 - **20261007** Added AlphaNoiseFilter_EditUtils — clean the alpha channel of Qwen-Image 2.1 alpha generations (clip low-value alpha noise, drop small alpha islands, erode/dilate, then feather) and output a clean RGBA image plus a mask. Feathering works strictly inwards: the gradient band is created inside the matte's own edge, so the silhouette never grows into the transparent background and no background colour can leak out as a halo.
@@ -208,6 +210,108 @@ So: to make an element disappear from the picture, use **Remove**; to get rid of
 - Text should get its own box per line, with the exact words quoted in `desc`.
 - Suggested sampling: the distilled checkpoint is a flow-map model — about 4–16 steps at CFG 1.0 (no negative prompt); the base model uses CFG.
 
+## MOSS-Image
+
+EditUtils adds a **reference-image edit path to MOSS-Image** in the same shape as the Krea2 edit path: the reference image is both vision-grounded in the prompt (Qwen3.5-9B with its vision tower) and injected into the DiT as clean reference tokens by a **model patch**.
+
+MOSS-Image (`comfy/ldm/moss_image/model.py`) is text-to-image only — its sequence is `[target image | text]` on a 4-axis RoPE `(r, f, h, w)`. `MossImageEditApply_EditUtils` rewrites the forward to
+
+```
+[target image | text | ref1 | ref2 | ...]
+```
+
+where reference `n` uses `r = n`, `f = text_len` (the coordinate the base model leaves at 0) and its own centred h/w grid, and is modulated at **t = 0** (`index_timestep_zero`). The prediction is still sliced back to the target image tokens. `ref_kv_cache` (default on) precomputes the references' attention K/V in one t=0 pass and injects them on every step — the ai-toolkit `kv_cache` MOSS-Image edit mode.
+
+**Nodes:**
+
+| Node | Purpose |
+|---|---|
+| `MossImageModelConfig_EditUtils` | Model config (`moss_image` route, `vae_unit=16` for the FLUX.2 VAE, empty `llama_template` because the MOSS tokenizer owns the chat template). |
+| `MossImageConfigPreparer_EditUtils` | Per-image config with MOSS defaults: 16 px steps, `ref_crop=center` (training-like fit), black padding, `to_vl=True`. Chain multiple nodes for multiple references. |
+| `EditTextEncode_EditUtils` | Encodes prompt + references: `Picture n: <|vision_start|>…` + VAE latents (128ch) on the conditioning. |
+| `MossImageEditApply_EditUtils` | **The model patch**: appends the reference latents as extra tokens, t=0, with optional `ref_kv_cache` / `ref_strength`. |
+
+**Wiring:**
+
+```
+UNETLoader  (moss_image_sft_int8_convrot) ──► MossImageEditApply ──► [LoRA] ──► KSampler ──► VAEDecode ──► SaveImage
+CLIPLoader  (qwen3.5_9b_w4a8_gptq, type moss_image) ─┐
+VAELoader   (flux2-vae) ─────────────────────────────┤
+LoadImage ──► MossImageConfigPreparer ───────────────┼──► EditTextEncode_EditUtils ──► positive / latent
+MossImageModelConfig ────────────────────────────────┘
+```
+
+**Notes:**
+
+- Requires a ComfyUI build with native MOSS-Image support (`image_model="moss_image"`, `CLIPLoader` type `moss_image`).
+- MOSS-Image-Base / -SFT are **text-to-image** checkpoints: the reference-token path is only meaningful with an edit LoRA trained on the same layout (ai-toolkit `moss_image` edit with `kv_cache`). Without one, references are an untrained conditioning signal.
+- `ref_kv_cache=True` matches the training default. If the LoRA was trained with `kv_cache: false`, turn the cache off — references then ride along in the sequence and attend to the text and noisy image too.
+- Reference images should be about 1 MP; a 1024×1024 reference adds 4096 tokens at every step (the cache makes them cheap to reuse). The cache itself is kept in CPU RAM — about 2 GB for 4096 reference tokens, per distinct text length (positive/negative), up to 4 variants.
+- Suggested starting point: Euler / Simple, 30 steps, CFG 3.0, `ref_strength=1.0`. MOSS's reference sampling also uses negative-branch layer skipping (e.g. `SkipLayerGuidanceDiTSimple`, `single_layers: 22`), which the patch honours.
+
+> ⚠️ **Note:** MOSS-Image edit support is new. It expects an edit LoRA; the base checkpoints will not magically learn reference conditioning from the patch alone.
+
+## MiniMax-H3-Image
+
+EditUtils supports **MiniMax-H3-Image** — the **image** model of the MiniMax H3 family (`image_model="minimax_h3_image"`), not the H3 video/audio model — through the `minimax_h3_image` route.
+
+> **H3-Image is a different model from H3.** H3 packs a `NestedTensor` of video + audio latents and samples on a shifted schedule; H3-Image denoises a **single 24-channel latent frame** (`[1, 24, 1, H/16, W/16]`) with no audio stream at all. Its checkpoint is a **6-step PDD distill**: the head bank lives on a fixed 7-point sigma grid (`pdd_sigmas`) and the CFG is baked into the weights, so the whole sampling contract is *6 steps, cfg 1.0, no real negative*.
+
+**ComfyUI already implements this natively** (`comfy/ldm/minimax/model.py` `MiniMaxH3ImageModel`, `model_base.MiniMaxH3Image`), so EditUtils only has to build the same three things its own `MiniMaxH3ImageConditioning` node builds:
+
+- **text** — the `minimax` CLIP (Qwen3-VL-32B truncated to layer 50). The tokenizer has **no chat template**: it emits `"Picture 1: " <vision block> "Picture 2: " <vision block> … <prompt>`, so a system prompt would be encoded as prompt text;
+- **reference latents** — a `minimax_refs` conditioning key, `[{"kind": "image", "latent_h": h, "latent_w": w, "latent": z}]`. `PackedLayout` packs the rows as `[text | references | target]` and the model re-injects them at `t = 0.999` every step (never denoised);
+- **target latent** — one 24ch frame at `H/16 × W/16`.
+
+No model patch is needed (unlike MOSS-Image or FLUX.2 klein), so the graph stays unpatched.
+
+**Nodes:**
+
+| Node | Purpose |
+|---|---|
+| `MinimaxH3ImageModelConfig_EditUtils` | Model config (`minimax_h3_image` route, `vae_unit=32`, empty template). |
+| `MinimaxH3ImageConfigPreparer_EditUtils` | Per-image config: `to_ref`, `ref_main_image`, `ref_short_edge` / `ref_max_short_edge` (1024 / 2048), `scale_up`, `to_vl`, crop/pad controls. Chain nodes for multiple references. |
+| `MinimaxH3ImageEditTextEncode_EditUtils` | One-node simple path (image1–3), same outputs as `EditTextEncode_EditUtils`. |
+| `MinimaxH3ImageOutputExtractor_EditUtils` | Unpacks `custom_output`, exposing `minimax_refs` and `target_size`. |
+| `MinimaxH3ImageEditApply_EditUtils` | Model check (optional): validates the architecture and prints the PDD grid / step / CFG contract. H3-Image needs **no** forward rewrite. |
+
+**Sizing** — H3I was trained on **4–20 MP** (best around 16 MP); a 1 MP target comes out as poster-like artifacts. References are happiest around 1 MP, which is why ComfyUI sizes edit references by a **short edge of 1024 px, clamped to 2048**, snapped to 32 px:
+
+- `ref_short_edge` (default 1024) is the short edge of both the VAE reference latent and the vision copy;
+- `ref_max_short_edge` (default 2048) clamps large inputs;
+- `scale_up` (default 1.0) on the **main** image multiplies its reference grid into the sampled target: the reference stays ~1 MP and the latent grows to 4-20 MP. `scale_up=2` on a 1 MP 1:1 reference gives a 4 MP target.
+
+Why 32 px and not 16: the VAE token is 16 px, but the DiT patches the latent 2×2, so a representable canvas side is a multiple of 32 px (two VAE tokens). That is also ComfyUI's own rounding for H3I references, and it is why the model config sets `vae_unit=32`.
+
+**Wiring** — as in [minimax h3 image editutils example.json](workflows/minimax%20h3%20image%20editutils%20example.json):
+
+```
+UNETLoader (minimax_h3_image_pruned_w4a8) ──────────────────────► KSampler ─► VAEDecode ─► SaveImage
+CLIPLoader  (qwen3vl_32b_minimax_h3_nvfp4_awq, type minimax) ─┐
+VAELoader   (minimax_h3_image_vae_fp16) ──────────────────────┼─► EditTextEncode
+LoadImage ─► MinimaxH3ImageConfigPreparer ─┬─ configs ────────┘
+                                         └─ chained reference preparers
+MinimaxH3ImageModelConfig ────────────────────────────────────► EditTextEncode
+EditTextEncode.conditioning ─► ConditioningZeroOut ─► KSampler.negative
+```
+
+**Sampling:**
+
+| Setting | Value | Why |
+|---|---|---|
+| `steps` | **6** | `sigma()` is linear in the checkpoint's 7-point PDD grid; 6 steps land exactly on it. Other counts interpolate off-grid. |
+| `cfg` | **1.0** | Guidance is baked into the weights. The negative only has to exist — `ConditioningZeroOut` is enough. |
+| sampler / scheduler | `euler` / `simple` | What the official workflow uses. |
+| `denoise` | 1.0 | Distilled trajectory. |
+
+**Prompting** — write the full caption of the **result** and refer to the references as `<Picture 1>`, `<Picture 2>`, … Do not type the `"Picture n: "` labels yourself: the tokenizer adds them, so a manual label is counted twice.
+
+**Notes:**
+
+- Requires a ComfyUI build with native MiniMax-H3-Image support (`image_model="minimax_h3_image"`, `CLIPLoader` type `minimax`).
+- Pixel masks are not part of the H3I layout; a mask wired into the preparer is ignored with a warning.
+- `MinimaxH3ImageEditApply_EditUtils` is optional. Wire it only as a guard/diagnostic — a FLUX / MOSS patch or the H3 **video** model on this route would silently ignore `minimax_refs`, and this node turns that into an error.
+
 ## Krea2 Breast Size Control
 
 A trained control LoRA plus `BreastSizeControl_EditUtils` makes the breast size a **dial you draw**: paint one or two markers on the canvas, and the marker's **area** (its position and angle too) drives the result. The prompt describes only the scene — deliberately **no size words** — because the geometry is meant to come from the reference image alone.
@@ -296,6 +400,11 @@ QwenImage21ModelConfig ──────────────────┴
 
 Example workflows are available in the [workflows](workflows/) directory:
 
+- **[minimax h3 image editutils example.json](workflows/minimax%20h3%20image%20editutils%20example.json)** - MiniMax-H3-Image editing workflow. `LoadImage → MinimaxH3ImageConfigPreparer_EditUtils (chained for the second reference) → EditTextEncode_EditUtils ← MinimaxH3ImageModelConfig_EditUtils → KSampler → VAEDecode → SaveImage`, with `ConditioningZeroOut` feeding the negative.
+  - Models: `minimax_h3_image_pruned_w4a8.safetensors` (UNET), `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` (CLIP, type `minimax`), `minimax_h3_image_vae_fp16.safetensors` (VAE).
+  - Sampler in the example: `euler / simple`, **6 steps**, CFG 1.0 — the checkpoint's PDD grid has 6 intervals and the guidance is baked into the weights.
+  - The main image sets `scale_up = 2`, so a ~1 MP reference samples a ~4 MP target; references keep the 1024 px short edge. No `MinimaxH3ImageEditApply_EditUtils` — H3-Image consumes `minimax_refs` natively.
+  - Requires a ComfyUI build with native MiniMax-H3-Image support.
 - **[flux3 editutils example.json](workflows/flux3%20editutils%20example.json)** - FLUX.3 Klein editing workflow using the bounding-box element table. `LoadImage → Flux3KleinConfigPreparer_EditUtils → Flux3KleinBBox_EditUtils → EditTextEncode_EditUtils ← Flux3KleinModelConfig_EditUtils → KSampler → VAEDecode → SaveImage`, with `ConditioningZeroOut` feeding the negative. The BBox node takes the preparer's `config` (its `configs` input is left unconnected), so the decorated config is appended to the chain.
   - Models: `flux3_image_klein_sd_int8_convrot.safetensors` (UNET), `qwen3vl_4b_fp8_scaled.safetensors` (CLIP, type `flux3`), `flux2-vae.safetensors` (VAE).
   - Sampler in the example: `euler / simple`, **8 steps**, CFG 1.0, fixed seed (the distilled flow-map checkpoint samples without guidance; 4–16 steps is the range). No `Flux3KleinEditApply_EditUtils` — FLUX.3 consumes `reference_latents` natively.
@@ -320,14 +429,14 @@ Example workflows are available in the [workflows](workflows/) directory:
 
 ## Pad Edge Control
 
-When `ref_crop` is set to `pad`, the image is padded to a multiple of the VAE unit size. How that padding looks is now configurable per image through `pad_mode`, `pad_color`, `pad_color_rgb` and `pad_noise` on the config preparer nodes (`QwenConfigPreparer_EditUtils` / `QwenImage21ConfigPreparer_EditUtils` / `Flux2KleinConfigPreparer_EditUtils` / `Flux3KleinConfigPreparer_EditUtils`), the `ConfigJsonParser_EditUtils` JSON, or the standalone `LongestEdgeImageProcess_EditUtils` node:
+When `ref_crop` is set to `pad`, the image is padded to a multiple of the VAE unit size. How that padding looks is now configurable per image through `pad_mode`, `pad_color`, `pad_color_rgb` and `pad_noise` on the config preparer nodes (`QwenConfigPreparer_EditUtils` / `QwenImage21ConfigPreparer_EditUtils` / `Flux2KleinConfigPreparer_EditUtils` / `Flux3KleinConfigPreparer_EditUtils` / `MossImageConfigPreparer_EditUtils` / `MinimaxH3ImageConfigPreparer_EditUtils`), the `ConfigJsonParser_EditUtils` JSON, or the standalone `LongestEdgeImageProcess_EditUtils` node:
 
 - **pad_mode** (default: `color`):
   - `color`: solid fill using `pad_color`
   - `edge`: replicate the outermost pixel row/column
   - `mirror`: reflect the content at the boundary
   - `border_mean`: fill each side with the mean of its nearest 8 pixels
-- **pad_color** (default: `white` for Qwen and Qwen-Image 2.1, `black` for Flux2Klein / Flux3Klein and standalone `LongestEdgeImageProcess_EditUtils`): dropdown with `red`, `green`, `blue`, `white`, `black`, `custom`.
+- **pad_color** (default: `white` for Qwen and Qwen-Image 2.1, `black` for Flux2Klein / Flux3Klein / MOSS-Image / MiniMax-H3-Image and standalone `LongestEdgeImageProcess_EditUtils`): dropdown with `red`, `green`, `blue`, `white`, `black`, `custom`.
 - **pad_color_rgb** (default: `-`): optional override, a **6-digit hex color, `#` optional** (e.g. `FF0000` or `#FF0000`). When it holds a valid hex it overrides `pad_color`, whatever the dropdown says. Anything else (`-`, wrong length, non-hex characters, plain numbers, `r,g,b`) is invalid and has no effect, so the dropdown value applies. `custom` carries no color of its own, so with an invalid hex it falls back to the model default.
 - **pad_noise** (default: `0.0`): Gaussian jitter (std) added **to the padding area only** — the image content is never modified. 0.02-0.05 is recommended with solid colors.
 
@@ -342,7 +451,7 @@ Documentation:
 
 ## Key Features
 
-- **Multi-Model Support**: Works with Qwen, Qwen-Image 2.1, Flux2Klein, Flux3Klein, Boogu and Krea2 models for versatile image editing
+- **Multi-Model Support**: Works with Qwen, Qwen-Image 2.1, Flux2Klein, Flux3Klein, Boogu, Krea2, MOSS-Image and MiniMax-H3-Image models for versatile image editing
 - **Flexible Configuration**: Per-image configuration options for reference and VL processing
 - **Pad Edge Control**: Configurable pad mode/color/noise (white edge default for Qwen 1.0 and Qwen-Image 2.1) to avoid black edge amplification
 - **Unified Interface**: Single node EditTextEncode_EditUtils works with multiple models through configuration nodes
@@ -498,7 +607,7 @@ A preset rescales the **whole drawing** to the class area and keeps the two mark
 
 ### ComfyUI-EditUtils vs ComfyUI-QwenEditUtils
 ComfyUI-EditUtils is the follow-up version of ComfyUI-QwenEditUtils with the following improvements:
-- Multi-model support (Qwen, Qwen-Image 2.1, Flux2Klein, Flux3Klein, Boogu and Krea2)
+- Multi-model support (Qwen, Qwen-Image 2.1, Flux2Klein, Flux3Klein, Boogu, Krea2, MOSS-Image and MiniMax-H3-Image)
 - Unified node architecture with configuration nodes
 - Enhanced flexibility and modularity
 - Improved code organization and maintainability
